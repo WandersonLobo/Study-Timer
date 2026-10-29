@@ -9,6 +9,7 @@ apenas com docstring não representam testes executados nem requisitos aprovados
 | `test_repository.py` | PRAGMAs, índices, checks, transações (parte CT-09/15) | Testes da base |
 | `test_database_safety.py` | Corrupção, WAL, backups e restauração | Testes de segurança |
 | `test_security.py` | Nome, SQL, privacidade, pacote, lock e infraestrutura offline | Testes de segurança |
+| `test_clock.py` | Parte de CT-03/12/13/16: monotônico, lacunas, correção civil e snapshots | Relógio confiável com fonte simulada |
 | `test_ui_states.py` | CT-01/03/16/17/26 | Reservado |
 | `test_timer.py` | CT-02/03/10/12/13 | Reservado |
 | `test_reports.py` | CT-05/06/07/14/25 | Reservado |
@@ -50,3 +51,27 @@ e mypy são executados na mesma linha Python 3.12. Interface e build Windows nã
 foram validados.
 Dependências fixadas continuam sujeitas ao aceite do build completo.
 Não se declara suporte ao Python 3.13 ou superior.
+
+## Incremento 1 — relógio confiável
+
+[test_clock.py](../tests/test_clock.py) usa uma fonte simulada, sem `sleep`, sem
+SQLite e sem widgets. Controla separadamente nanossegundos monotônicos e horário
+civil. A cobertura inclui:
+
+- Âncora UTC única, reutilização da amostra na futura transação e rejeição de
+  início concorrente ou limpeza de um relógio em execução.
+- Frações acumuladas antes do truncamento, milhares de callbacks irregulares e
+  origens monotônicas grandes, nulas ou negativas sem perda da diferença inteira.
+- Lacuna de exatamente 5 s aceita; acima de 5 s congela o último snapshot.
+- Alteração civil para frente/trás, fronteira exata de 5 s, ajustes graduais e
+  regressão monotônica sem duração negativa ou alteração da âncora.
+- Pausa que não lê a fonte nem retoma automaticamente; um novo intervalo começa
+  em zero e não contabiliza o período pausado.
+- Getters e leituras de diagnóstico que não confirmam ticks nem ocultam lacunas.
+- Falha da fonte e âncora não finita, preservação do último snapshot e logs sem
+  texto potencialmente privado da exceção.
+
+Para executar apenas esse incremento: `python -m pytest tests/test_clock.py`.
+A suspensão simulada valida o detector conservador; CT-13 ainda exige integração
+e teste de suspend/hibernate real no Windows. Heartbeat, recuperação de processo
+e mudança de status no banco continuam pertencendo aos incrementos seguintes.

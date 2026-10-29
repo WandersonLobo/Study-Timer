@@ -4,9 +4,10 @@ Aplicativo desktop de estudos para Windows 10/11 x64, feito com Python 3.12,
 CustomTkinter e SQLite. Dados locais, uso offline e somente duas telas:
 Cronômetro e Histórico. Baseado na especificação técnica v1.1 revisada.
 
-**Estado atual: esqueleto arquitetural.** Navegação e infraestrutura inicial estão
-preparadas; cronômetro, relatórios, recuperação e calendário ainda serão
-implementados. Botões de sessão permanecem desabilitados. Não é uma versão de uso.
+**Estado atual: estrutura e relógio confiável.** Navegação, infraestrutura e
+validação temporal estão preparadas. Comandos de sessão, relatórios, recuperação
+e calendário ainda serão implementados. Botões de sessão permanecem desabilitados.
+Não é uma versão de uso.
 
 ## Estrutura
 

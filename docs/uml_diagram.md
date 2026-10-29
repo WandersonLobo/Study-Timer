@@ -84,10 +84,21 @@ classDiagram
         +get_day_sessions(day: date, now: ClockSnapshot | None) list~SessionSummary~
     }
     class ClockService {
-        <<contract>>
         -_source: ClockSource
+        -_start_mono_ns: int | None
+        -_last_reading: ClockReading | None
+        -_snapshot: ClockSnapshot | None
+        -_is_running: bool
+        -_pause_reason: PauseReason | None
+        +is_running: bool
+        +pause_reason: PauseReason | None
         +__init__(source: ClockSource)
+        +capture_anchor() ClockReading
+        +start_interval(interval_id: int, anchor: ClockReading | None) ClockSnapshot
+        +tick() ClockSnapshot | None
+        +pause(reason: PauseReason) ClockSnapshot | None
         +get_snapshot() ClockSnapshot | None
+        +reset() None
     }
     class ClockSource {
         <<protocol>>
@@ -124,7 +135,7 @@ classDiagram
     note for Application "Mantém as duas telas e os serviços ao navegar."
     note for TimerService "Somente get_active_session está concluído. Os comandos ainda são contratos."
     note for ReportService "Consultas agregadas ainda não implementadas."
-    note for ClockService "Validação de ticks e snapshots ainda pendente."
+    note for ClockService "Implementado. Somente tick aceita tempo; pausa preserva o ultimo snapshot e seu motivo."
 ```
 
 Abreviações usadas apenas para deixar as caixas legíveis, sem criar novos tipos
@@ -141,6 +152,12 @@ O método `transaction()` é decorado com `@contextmanager`: sua anotação é
 `Iterator[sqlite3.Connection]`, mas o chamador o utiliza com `with`.
 `SystemClock` não herda explicitamente de `ClockSource`; o método `read()` com
 a assinatura compatível satisfaz o protocolo por tipagem estrutural.
+
+Em `ClockService`, `is_running` e `pause_reason` são propriedades somente de
+leitura. `start_interval()` aceita `anchor=None` e captura uma âncora quando
+ela não for fornecida; `pause()` usa `PauseReason.USER` como motivo padrão.
+O getter do snapshot não lê a fonte nem atualiza a contagem. O último snapshot
+permanece disponível após uma pausa, para que o serviço de sessão o persista.
 
 As telas atuais ainda não recebem serviços diretamente. A janela guarda os
 serviços e cria os widgets; a ligação dos botões aos comandos será feita na
@@ -236,7 +253,9 @@ classDiagram
     StudyRepository ..> SessionStatus : filtro e conversao
     ClockSource ..> ClockReading : retorno do protocolo
     SystemClock ..> ClockReading : cria amostra
-    ClockService ..> ClockSnapshot : retorno previsto
+    ClockService ..> ClockReading : captura e valida amostras
+    ClockService ..> ClockSnapshot : cria snapshot validado
+    ClockService ..> PauseReason : informa pausa segura
     ReportService ..> ClockSnapshot : recebe tempo validado
     ReportService ..> PeriodTotals : retorno previsto
     ReportService ..> SessionSummary : retorno previsto
@@ -248,8 +267,9 @@ classDiagram
 ```
 
 `StudyRepository` nesta vista é a mesma classe da vista anterior. As dependências
-de retorno previstas representam assinaturas já declaradas, sem indicar que os
-relatórios ou snapshots já estejam funcionando.
+de retorno previstas dos relatórios representam assinaturas já declaradas,
+sem indicar que essas consultas estejam funcionando. Os snapshots do relógio
+já são produzidos por ticks validados.
 
 A cardinalidade `0..*` representa o esquema SQLite atual: cada intervalo pertence
 a exatamente uma sessão, enquanto uma sessão pode existir sem intervalos. O
@@ -360,7 +380,9 @@ validação e backup são abertas e fechadas nos próprios módulos de infraestr
 | Intervalo aberto | No máximo um por sessão; `running` exige exatamente um, `paused` e `finished` exigem zero ao validar a transação. |
 | Datas do intervalo | `last_seen_at >= started_at`; `ended_at >= started_at`; ao encerrar, `last_seen_at <= ended_at`. |
 | Finalização | `finished_at` só existe em `finished` e nunca antecede `created_at`. O contrato ainda pendente deve usar o maior término confirmado dos intervalos. |
-| Tempo | Duração por nanossegundos monotônicos; UTC civil é âncora de calendário. `valid_until_utc_s = started_at + elapsed_s` é uma regra do contrato do snapshot. |
+| Tempo | Duração por nanossegundos monotônicos; UTC civil é âncora de calendário. O relógio garante `valid_until_utc_s = started_at + elapsed_s` nos snapshots que produz. |
+| Tick inseguro | Lacuna monotônica estritamente maior que 5 s pausa com TICK_GAP. Regressão monotônica ou divergência civil estritamente maior que 5 s pausa com CLOCK_CHANGE. O tick rejeitado não é contabilizado. |
+| Pausa do relógio | `pause()` não lê a fonte e congela o último tick aceito. O relógio não altera o status no SQLite; essa integração pertence ao serviço de sessão ainda pendente. |
 | Estado visual | `idle` não possui sessão pendente; `running` corresponde a sessão running; `paused` e `recovered` correspondem a sessão paused. Integração visual ainda pendente. |
 | Relatórios | Somam segundos antes de formatar minutos, dividem intervalos por fronteiras locais e evitam dupla soma do intervalo aberto. Implementação pendente. |
 | Persistência | WAL, synchronous FULL, FKs e transações explícitas; SQL parametrizado e validação antes do COMMIT. |
@@ -368,11 +390,12 @@ validação e backup são abertas e fechadas nos próprios módulos de infraestr
 
 ## Estado de implementação e extensão do projeto
 
-- **Implementado:** modelos, enumerações, fonte `SystemClock`, consulta de sessão
+- **Implementado:** modelos, enumerações, fonte `SystemClock`, relógio com âncora,
+  validação de ticks, snapshots e pausa conservadora; consulta de sessão
   pendente, transações e invariantes do repositório, inicialização e saúde do banco,
   backups/restauração, lock de instância, logs e navegação estrutural entre duas telas.
 - **Contratos ainda pendentes:** comandos do cronômetro, heartbeat, recuperação de
-  sessão, validação temporal do `ClockService`, relatórios e integração dos estados
+  sessão, persistência das pausas detectadas pelo relógio, relatórios e integração dos estados
   visuais, modais e calendário.
 - **Integração Windows pendente:** eventos de suspensão e retomada devem alimentar
   o fluxo de pausa segura. Ainda não existe uma classe adaptadora para esses eventos;
