@@ -84,7 +84,8 @@ do primeiro build de distribuição. Não há suporte declarado a Python 3.13+.
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-Consulte [arquitetura](docs/architecture.md) e [plano de testes](docs/testing.md)
+Consulte [arquitetura](docs/architecture.md), [diagrama de classes UML](docs/uml_diagram.md)
+e [plano de testes](docs/testing.md)
 para os contratos, limites desta etapa e próximos passos.
 
 ## Dados e logs
