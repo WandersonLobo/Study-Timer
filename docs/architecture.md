@@ -27,9 +27,10 @@ Implementado: composição das camadas, navegação inicial, configuração loca
 logging, criação do banco, PRAGMAs, esquema, validação transacional básica e
 consulta da sessão pendente. O relógio confiável também está implementado, com
 âncora única, duração monotônica, validação de ticks e congelamento seguro.
-As ações da interface estão desabilitadas.
+O ciclo básico de sessões também funciona sem interface: início, pausa, retomada
+e finalização com transações atômicas. As ações da interface estão desabilitadas.
 
-Os comandos de sessão e os relatórios ainda levantam `NotImplementedError`.
+Heartbeat, recuperação de processo e relatórios ainda levantam `NotImplementedError`.
 Não há contagem, gravação de sessões pela UI, recuperação automática ou relatórios
 prontos. `recovered` e `idle` são estados visuais, nunca valores persistidos.
 
@@ -82,24 +83,25 @@ civil e monotônico **maior que** 5 s provoca `CLOCK_CHANGE`. Os limites exatos 
 parada mesmo se a fonte voltar ao normal. Falhas da fonte também congelam antes
 de propagar a exceção; o log contém somente motivo e tipo da falha.
 
-### Integração prevista para os próximos incrementos
+### Integração com o serviço de sessão
 
-1. Capturar a âncora antes de inserir o intervalo e usar sua parte civil inteira
-   no `started_at` do SQLite. Depois do COMMIT, iniciar o relógio com o ID criado
-   e a **mesma** âncora. Se a escrita falhar, não iniciar a contagem.
-2. Chamar `tick()` em callbacks de aproximadamente 250 ms. O heartbeat de 5 s
-   persiste o snapshot já validado; não substitui os ticks frequentes.
-3. Para uma pausa solicitada pelo usuário, validar um último tick e então chamar
-   `pause(USER)`. Em suspensão, falha de escrita ou encerramento conservador,
-   congelar o último tick confiável sem incluir o tempo posterior.
-4. Quando `is_running` ficar falso, o serviço de sessão deverá encerrar o intervalo
-   no snapshot congelado, persistir paused e informar o motivo à interface.
-5. Após pausar, persistir antes de limpar ou substituir o estado. Retomar exige
-   um novo intervalo e nova âncora; o relógio não soma duração entre intervalos.
-6. Relatórios ao vivo receberão snapshot somente enquanto o intervalo estiver
-   aberto. Depois da pausa persistida, devem usar os intervalos fechados e `now=None`.
+1. **Implementado:** início e retomada capturam a âncora antes de inserir o intervalo,
+   gravam sua parte civil inteira e iniciam o relógio somente após COMMIT com a
+   **mesma** âncora. Falhas de escrita não iniciam um novo relógio.
+2. **Pendente:** callbacks de aproximadamente 250 ms devem chamar `ClockService.tick()`.
+   O heartbeat de 5 s deverá persistir o snapshot já validado; não substituirá os ticks.
+3. **Implementado:** a pausa USER valida um último tick antes de congelar. Suspensão,
+   falha de escrita e encerramento conservador congelam o último tick confiável
+   sem ler a fonte. Se o relógio já detectou anomalia, seu motivo inicial é preservado.
+4. **Comando implementado, agendamento pendente:** quando o relógio parar sozinho,
+   o chamador deverá acionar `pause_session(clock.pause_reason)` para persistir o
+   intervalo e paused. O relógio não altera o banco por conta própria.
+5. **Implementado:** retomada exige novo intervalo e nova âncora, preservando a
+   sessão. Finalização limpa o relógio somente após confirmar o banco.
+6. **Pendente:** relatórios ao vivo receberão snapshot somente enquanto o intervalo
+   estiver aberto. Após a pausa persistida, usarão os intervalos fechados e `now=None`.
 
-Essas integrações ainda não foram implementadas no `TimerService` nem na UI.
+A UI ainda não chama esses comandos nem agenda os ticks.
 O relógio não pode inferir uma UTC correta se o horário civil já estiver errado
 no início. A detecção conservadora também pode descartar tempo de estudo durante
 um bloqueio prolongado do sistema, conforme a especificação.
@@ -114,6 +116,45 @@ um bloqueio prolongado do sistema, conforme a especificação.
   evita essa inconsistência na integração transacional.
 - A documentação anterior tratava toda a validação temporal como pendente.
   Agora distingue o relógio concluído da integração e persistência ainda pendentes.
+
+## Ciclo básico da sessão — incremento 2
+
+O [TimerService](../app/services/timer_service.py) não executa SQL nem mantém uma
+cópia mutável da sessão. Consulta o estado persistido e coordena o relógio com os
+comandos atômicos de [StudyRepository](../app/database/repository.py).
+
+| Comando | Pré-condição | Escritas na mesma transação |
+| --- | --- | --- |
+| Iniciar | Sem sessão pendente e com relógio parado; nome normalizado com até 120 caracteres. | Insere sessão paused, insere primeiro intervalo, muda status para running. |
+| Pausar | Sessão running e snapshot correspondente ao intervalo aberto. | Confirma last_seen_at e ended_at sintéticos, muda status para paused. |
+| Retomar | Sessão paused e relógio parado. | Insere novo intervalo na mesma sessão, muda status para running. |
+| Finalizar | Sessão running com snapshot correspondente, ou sessão paused sem snapshot aberto. | Fecha intervalo se necessário e grava finished com finished_at calculado dos intervalos. |
+
+Cada comando abre `BEGIN IMMEDIATE`, verifica seu estado dentro da transação,
+valida invariantes antes do COMMIT e reverte tudo em qualquer falha. Não há troca
+de nome durante uma sessão nem exclusão dos registros ao finalizar.
+
+Para finalizar, se houve tempo positivo em algum intervalo, `finished_at` é o
+maior término confirmado, nunca inferior a `created_at`. Caso contrário, usa
+`created_at`. A regra de zero segundos também vale após várias retomadas com
+zero segundos. Finalizar paused não consulta o horário civil do clique.
+
+O repositório rejeita snapshots de outro intervalo, âncora diferente, duração
+negativa, término diferente de `started_at + elapsed_s` ou término anterior ao
+último checkpoint. Uma correção civil durante a pausa pode ancorar o próximo
+intervalo antes dos anteriores; seus segundos continuam válidos e `finished_at`
+respeita o maior término, sem reescrever o histórico.
+
+Se pausar ou finalizar falhar, o banco sofre rollback e o relógio permanece
+congelado com seu snapshot. Repetir o comando usa esse mesmo corte, excluindo
+o tempo até a nova tentativa. Em falha de início/retomada, o novo relógio não é
+iniciado. Exceções são propagadas; diálogos, política completa de tentativa e
+recuperação após reinício continuam para os próximos incrementos.
+
+Uma sessão running carregada sem um relógio correspondente é rejeitada pelos
+comandos de pausa/finalização, exigindo recuperação. Não se usa a hora de reabrir
+como término nem se encerra silenciosamente no checkpoint neste incremento.
+Sessões paused podem ser retomadas ou finalizadas com novas instâncias dos serviços.
 
 ## Banco e evolução
 
@@ -135,7 +176,7 @@ regra for implementada. A conexão não deve escapar para a camada visual.
 ## Próximas etapas
 
 1. Validar as dependências em Python 3.12 x64 e fixar o patch de build aprovado.
-2. Implementar sessões e heartbeat sobre o relógio já validado.
+2. Implementar heartbeat sobre o relógio e o ciclo de sessões já validados.
 3. Implementar recuperação, tratamento de falhas de escrita e eventos Windows.
 4. Implementar relatórios e fronteiras locais, incluindo DST e mudança de fuso.
 5. Conectar as duas telas, estados visuais, modais e calendário mensal.

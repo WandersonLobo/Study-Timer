@@ -1,12 +1,14 @@
 """Verifica integridade real do SQLite e rollback do contexto transacional."""
 
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from app.database.connection import initialize_database
 from app.database.repository import StudyRepository
+from app.models import ClockSnapshot, SessionStatus
 
 
 def test_pragmas_and_idempotent_initialization(tmp_path: Path) -> None:
@@ -75,3 +77,57 @@ def test_invalid_rows_are_rejected(connection: sqlite3.Connection, statement: st
     connection.execute("INSERT INTO sessions VALUES (1, 'Estudo livre', 1000, NULL, 'paused')")
     with pytest.raises(sqlite3.IntegrityError):
         connection.execute(statement)
+
+
+@pytest.mark.parametrize("invalid_part", ["identity", "anchor", "negative", "end", "checkpoint"])
+def test_stale_or_inconsistent_snapshot_never_closes_an_interval(
+    connection: sqlite3.Connection, invalid_part: str
+) -> None:
+    repository = StudyRepository(connection)
+    session, interval = repository.start_session("Snapshot validado", 1000)
+    snapshot = ClockSnapshot(interval.id, interval.started_at, 1, interval.started_at + 1)
+    if invalid_part == "identity":
+        snapshot = replace(snapshot, interval_id=interval.id + 1)
+    elif invalid_part == "anchor":
+        snapshot = replace(snapshot, started_at=999)
+    elif invalid_part == "negative":
+        snapshot = replace(snapshot, elapsed_s=-1, valid_until_utc_s=999)
+    elif invalid_part == "end":
+        snapshot = replace(snapshot, valid_until_utc_s=1005)
+    else:
+        connection.execute(
+            "UPDATE study_intervals SET last_seen_at = ? WHERE id = ?", (1002, interval.id)
+        )
+    previous = repository.get_open_interval(session.id)
+    with pytest.raises(ValueError):
+        repository.pause_session(session.id, snapshot)
+    assert repository.get_session(session.id) == session
+    assert repository.get_open_interval(session.id) == previous
+    assert not connection.in_transaction
+
+
+def test_finish_requires_snapshot_only_for_running_sessions(connection: sqlite3.Connection) -> None:
+    repository = StudyRepository(connection)
+    session, interval = repository.start_session("Estado e snapshot", 1000)
+    snapshot = ClockSnapshot(interval.id, 1000, 0, 1000)
+    with pytest.raises(ValueError):
+        repository.finish_session(session.id)
+    paused = repository.pause_session(session.id, snapshot)
+    with pytest.raises(ValueError):
+        repository.finish_session(session.id, snapshot)
+    assert repository.get_session(session.id) == paused
+    finished = repository.finish_session(session.id)
+    assert finished.status == SessionStatus.FINISHED
+    with pytest.raises(RuntimeError):
+        repository.resume_session(session.id, 2000)
+    with pytest.raises(RuntimeError):
+        repository.finish_session(session.id)
+
+
+def test_repository_validates_names_when_called_directly(connection: sqlite3.Connection) -> None:
+    repository = StudyRepository(connection)
+    with pytest.raises(ValueError):
+        repository.start_session("x" * 121, 1000)
+    assert repository.get_pending_session() is None
+    session, _ = repository.start_session(" \x00\n ", 1000)
+    assert session.name == "Estudo livre"

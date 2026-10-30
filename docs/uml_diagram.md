@@ -74,6 +74,9 @@ classDiagram
         +recover_pending() Session | None
         +heartbeat() None
         +get_active_session() Session | None
+        -_require_active_session(status: SessionStatus) Session
+        -_require_stopped_clock() None
+        -_freeze_interval(session_id: int, reason: PauseReason) ClockSnapshot
     }
     class ReportService {
         <<contract>>
@@ -113,6 +116,18 @@ classDiagram
         +transaction() Iterator~SQLiteConnection~
         +validate_invariants() None
         +get_pending_session() Session | None
+        +get_session(session_id: int) Session | None
+        +get_open_interval(session_id: int) StudyInterval | None
+        +get_session_intervals(session_id: int) list~StudyInterval~
+        +start_session(name: str, started_at: int) SessionIntervalPair
+        +resume_session(session_id: int, started_at: int) SessionIntervalPair
+        +pause_session(session_id: int, snapshot: ClockSnapshot) Session
+        +finish_session(session_id: int, snapshot: ClockSnapshot | None) Session
+        -_open_interval(session_id: int, started_at: int) StudyInterval
+        -_close_interval(session_id: int, snapshot: ClockSnapshot) None
+        -_require_session(session_id: int, status: SessionStatus) Session
+        -_session_from_row(row: SQLiteRow) Session
+        -_interval_from_row(row: SQLiteRow) StudyInterval
     }
     class SQLiteConnection {
         <<external>>
@@ -133,7 +148,8 @@ classDiagram
     StudyRepository --> SQLiteConnection : _connection
 
     note for Application "Mantém as duas telas e os serviços ao navegar."
-    note for TimerService "Somente get_active_session está concluído. Os comandos ainda são contratos."
+    note for TimerService "Ciclo basico implementado. Heartbeat e recuperacao permanecem contratos."
+    note for StudyRepository "Cada comando de escrita possui BEGIN IMMEDIATE, validacao e COMMIT ou rollback integral."
     note for ReportService "Consultas agregadas ainda não implementadas."
     note for ClockService "Implementado. Somente tick aceita tempo; pausa preserva o ultimo snapshot e seu motivo."
 ```
@@ -147,6 +163,8 @@ ou classes no código:
 | `ViewsByName` | `dict[str, TimerView \| HistoryView]` |
 | `SecondsByDay` | `dict[date, int]` |
 | `SQLiteConnection` | `sqlite3.Connection` |
+| `SQLiteRow` | `sqlite3.Row` |
+| `SessionIntervalPair` | `tuple[Session, StudyInterval]` |
 
 O método `transaction()` é decorado com `@contextmanager`: sua anotação é
 `Iterator[sqlite3.Connection]`, mas o chamador o utiliza com `with`.
@@ -158,6 +176,13 @@ leitura. `start_interval()` aceita `anchor=None` e captura uma âncora quando
 ela não for fornecida; `pause()` usa `PauseReason.USER` como motivo padrão.
 O getter do snapshot não lê a fonte nem atualiza a contagem. O último snapshot
 permanece disponível após uma pausa, para que o serviço de sessão o persista.
+
+O serviço de sessão já inicia, pausa, retoma e finaliza pela API do repositório.
+O início e a retomada só iniciam o relógio após COMMIT, usando a mesma âncora
+gravada no intervalo. O nome é normalizado antes de amostrar o relógio e também
+na fronteira de escrita do repositório. `finish_session()` do repositório aceita
+`snapshot=None` como padrão, permitido somente quando a sessão está paused.
+Os dois conversores de linhas do repositório são métodos estáticos internos.
 
 As telas atuais ainda não recebem serviços diretamente. A janela guarda os
 serviços e cria os widgets; a ligação dos botões aos comandos será feita na
@@ -249,7 +274,10 @@ classDiagram
 
     TimerService ..> Session : retorna
     TimerService ..> PauseReason : recebe ao pausar
+    TimerService ..> ClockSnapshot : valida e congela intervalo
     StudyRepository ..> Session : materializa consulta
+    StudyRepository ..> StudyInterval : cria e consulta intervalos
+    StudyRepository ..> ClockSnapshot : valida antes de encerrar
     StudyRepository ..> SessionStatus : filtro e conversao
     ClockSource ..> ClockReading : retorno do protocolo
     SystemClock ..> ClockReading : cria amostra
@@ -379,10 +407,10 @@ validação e backup são abertas e fechadas nos próprios módulos de infraestr
 | Sessão pendente | No máximo uma sessão `running` ou `paused` no banco, garantido por índice único parcial. |
 | Intervalo aberto | No máximo um por sessão; `running` exige exatamente um, `paused` e `finished` exigem zero ao validar a transação. |
 | Datas do intervalo | `last_seen_at >= started_at`; `ended_at >= started_at`; ao encerrar, `last_seen_at <= ended_at`. |
-| Finalização | `finished_at` só existe em `finished` e nunca antecede `created_at`. O contrato ainda pendente deve usar o maior término confirmado dos intervalos. |
+| Finalização | `finished_at` só existe em `finished` e nunca antecede `created_at`. Usa o maior término confirmado, limitado inferiormente por created_at. Se nenhum intervalo teve tempo positivo, usa created_at, mesmo se houver intervalos de zero segundos retomados depois. |
 | Tempo | Duração por nanossegundos monotônicos; UTC civil é âncora de calendário. O relógio garante `valid_until_utc_s = started_at + elapsed_s` nos snapshots que produz. |
 | Tick inseguro | Lacuna monotônica estritamente maior que 5 s pausa com TICK_GAP. Regressão monotônica ou divergência civil estritamente maior que 5 s pausa com CLOCK_CHANGE. O tick rejeitado não é contabilizado. |
-| Pausa do relógio | `pause()` não lê a fonte e congela o último tick aceito. O relógio não altera o status no SQLite; essa integração pertence ao serviço de sessão ainda pendente. |
+| Pausa do relógio | `pause()` não lê a fonte e congela o último tick aceito. TimerService já persiste esse snapshot e o status paused atomicamente quando seu comando de pausa é chamado. O agendamento dos ticks e a integração automática da UI permanecem pendentes. |
 | Estado visual | `idle` não possui sessão pendente; `running` corresponde a sessão running; `paused` e `recovered` correspondem a sessão paused. Integração visual ainda pendente. |
 | Relatórios | Somam segundos antes de formatar minutos, dividem intervalos por fronteiras locais e evitam dupla soma do intervalo aberto. Implementação pendente. |
 | Persistência | WAL, synchronous FULL, FKs e transações explícitas; SQL parametrizado e validação antes do COMMIT. |
@@ -393,9 +421,10 @@ validação e backup são abertas e fechadas nos próprios módulos de infraestr
 - **Implementado:** modelos, enumerações, fonte `SystemClock`, relógio com âncora,
   validação de ticks, snapshots e pausa conservadora; consulta de sessão
   pendente, transações e invariantes do repositório, inicialização e saúde do banco,
-  backups/restauração, lock de instância, logs e navegação estrutural entre duas telas.
-- **Contratos ainda pendentes:** comandos do cronômetro, heartbeat, recuperação de
-  sessão, persistência das pausas detectadas pelo relógio, relatórios e integração dos estados
+  ciclo básico de sessões e intervalos com escritas atômicas; backups/restauração,
+  lock de instância, logs e navegação estrutural entre duas telas.
+- **Contratos ainda pendentes:** heartbeat, recuperação de processo,
+  agendamento da persistência das pausas detectadas pelo relógio, relatórios e integração dos estados
   visuais, modais e calendário.
 - **Integração Windows pendente:** eventos de suspensão e retomada devem alimentar
   o fluxo de pausa segura. Ainda não existe uma classe adaptadora para esses eventos;

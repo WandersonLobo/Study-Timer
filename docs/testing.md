@@ -11,7 +11,7 @@ apenas com docstring não representam testes executados nem requisitos aprovados
 | `test_security.py` | Nome, SQL, privacidade, pacote, lock e infraestrutura offline | Testes de segurança |
 | `test_clock.py` | Parte de CT-03/12/13/16: monotônico, lacunas, correção civil e snapshots | Relógio confiável com fonte simulada |
 | `test_ui_states.py` | CT-01/03/16/17/26 | Reservado |
-| `test_timer.py` | CT-02/03/10/12/13 | Reservado |
+| `test_timer.py` | CT-02/03, parte de CT-04/09/12/13/15/18 | Ciclo de sessão sem interface e rollback real |
 | `test_reports.py` | CT-05/06/07/14/25 | Reservado |
 | `test_recovery.py` | CT-04/08/18/19 | Reservado |
 | `test_build_smoke.py` | Conteúdo e abertura do onedir (parte CT-23) | Condicional ao build |
@@ -73,5 +73,31 @@ civil. A cobertura inclui:
 
 Para executar apenas esse incremento: `python -m pytest tests/test_clock.py`.
 A suspensão simulada valida o detector conservador; CT-13 ainda exige integração
-e teste de suspend/hibernate real no Windows. Heartbeat, recuperação de processo
-e mudança de status no banco continuam pertencendo aos incrementos seguintes.
+e teste de suspend/hibernate real no Windows. Heartbeat e recuperação de processo
+continuam pertencendo aos incrementos seguintes; a mudança de status no banco
+já é realizada pelos comandos do incremento 2.
+
+## Incremento 2 — ciclo básico de sessão
+
+[test_timer.py](../tests/test_timer.py) integra os serviços com SQLite temporário
+real e reutiliza a fonte simulada de relógio. Não carrega widgets nem consulta o
+banco pessoal. Cobre:
+
+- Início, pausa, retomada e finalização; mesma sessão e novo intervalo em cada retomada.
+- Nome padrão, normalização, limite de 120 caracteres e nome contendo sintaxe SQL.
+- Exclusão do tempo pausado, truncamento por intervalo e histórico preservado.
+- Sessão de zero segundos, inclusive após uma retomada horas depois.
+- Finalização paused sem ler a fonte e maior término após correção civil entre intervalos.
+- Sessão única em running/paused, inclusive com duas conexões ao mesmo arquivo.
+- Estados inválidos, relógio ausente após reinício e falha da fonte ao retomar.
+- Rollback de sessão/intervalo por triggers de falha no meio da operação.
+- Negação real de COMMIT pela API `set_authorizer` do SQLite nos quatro comandos;
+  banco intacto, relógio seguro e repetição sem contabilizar o tempo de espera.
+- Reabertura do arquivo com novas instâncias dos serviços para retomar uma sessão paused.
+
+[test_repository.py](../tests/test_repository.py) também verifica snapshots
+inconsistentes ou anteriores ao checkpoint e o contrato de finalização para cada estado.
+Executar: `python -m pytest tests/test_timer.py tests/test_repository.py`.
+
+Este incremento não valida heartbeat, recuperação de sessão running após crash,
+fechamento de janela, modais ou eventos reais de energia do Windows.
