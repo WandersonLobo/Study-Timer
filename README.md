@@ -9,10 +9,12 @@ pausar, retomar, finalizar e salvar checkpoints funcionam pelos serviços e test
 com SQLite. Ao abrir, uma sessão interrompida é recuperada como pausada até o
 último checkpoint confirmado, excluindo o tempo com o programa fechado. Falhas
 de persistência interrompem a contagem e são sinalizadas sem confirmar dados.
-Relatórios, calendário e agendamento dos ticks/heartbeats na UI ainda estão
-pendentes. A navegação estrutural existe; os botões de sessão permanecem
-desabilitados até a integração da UI.
-Não é uma versão de uso.
+A tela Cronômetro permite iniciar, pausar, retomar e finalizar, com atualização
+de 250 ms e heartbeat de 5 s. O nome fica bloqueado até finalizar a sessão.
+Ao reabrir, um diálogo permite retomar, finalizar ou manter a sessão pausada.
+Fechar a janela salva uma pausa; falhas mantêm a janela aberta para nova tentativa.
+Relatórios, calendário e eventos de energia Windows ainda estão pendentes.
+O aceite visual em Windows com Tcl/Tk e o build ainda precisam ser realizados.
 
 ## Estrutura
 

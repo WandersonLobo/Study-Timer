@@ -134,6 +134,43 @@ class TimerService:
         """Consulta a sessão running/paused sem tocar na interface."""
         return self._repository.get_pending_session()
 
+    @property
+    def is_running(self) -> bool:
+        """Expõe o estado real da contagem, inclusive após rollback."""
+        return self._clock.is_running
+
+    def freeze(self) -> None:
+        """Interrompe a contagem sem anunciar persistência ou descartar o snapshot."""
+        self._clock.pause(PauseReason.WRITE_FAILURE)
+
+    def tick(self) -> None:
+        """Valida um tick e persiste imediatamente uma pausa automática."""
+        self._clock.tick()
+        if not self._clock.is_running and self._clock.pause_reason is not None:
+            session = self.get_active_session()
+            if session is not None and session.status == SessionStatus.RUNNING:
+                self.pause_session(self._clock.pause_reason)
+
+    def get_elapsed_seconds(self) -> int:
+        """Soma a sessão pendente substituindo o checkpoint aberto pelo snapshot.
+
+        A UI apenas formata o total; nunca calcula durações ou soma snapshots.
+        """
+        with self._persistence_operation():
+            session = self.get_active_session()
+            if session is None:
+                return 0
+            snapshot = self._clock.get_snapshot()
+            total = 0
+            for interval in self._repository.get_session_intervals(session.id):
+                end = interval.ended_at
+                if end is None:
+                    end = interval.last_seen_at
+                    if snapshot is not None and snapshot.interval_id == interval.id:
+                        end = snapshot.valid_until_utc_s
+                total += end - interval.started_at
+            return total
+
     @contextmanager
     def _persistence_operation(self) -> Iterator[None]:
         """Congela em falhas SQLite, sem ocultar exceções nem registrar dados privados."""

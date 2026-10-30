@@ -10,7 +10,7 @@ apenas com docstring não representam testes executados nem requisitos aprovados
 | `test_database_safety.py` | Corrupção, WAL, backups e restauração | Testes de segurança |
 | `test_security.py` | Nome, SQL, privacidade, pacote, lock e infraestrutura offline | Testes de segurança |
 | `test_clock.py` | Parte de CT-03/12/13/16: monotônico, lacunas, correção civil e snapshots | Relógio confiável com fonte simulada |
-| `test_ui_states.py` | CT-01/03/16/17/26 | Reservado |
+| `test_ui_states.py` | Parte de CT-01/03/16/17/26 | Callbacks reais, widgets simulados e SQLite temporário |
 | `test_timer.py` | CT-02/03, parte de CT-04/09/12/13/15/18 | Ciclo de sessão sem interface e rollback real |
 | `test_reports.py` | CT-05/06/07/14/25 | Reservado |
 | `test_recovery.py` | Parte de CT-04/08/18/19 | Heartbeat, falhas SQLite e recuperação em novo processo |
@@ -99,8 +99,8 @@ inconsistentes ou anteriores ao checkpoint e o contrato de finalização para ca
 Executar: `python -m pytest tests/test_timer.py tests/test_repository.py`.
 
 Os testes do incremento 2 não cobrem heartbeat ou recuperação de sessão running;
-esses cenários são cobertos pelo incremento 3. Fechamento de janela, modais e
-eventos reais de energia do Windows continuam pendentes.
+esses cenários são cobertos pelo incremento 3. O incremento 4 testa callbacks
+de fechamento e modais; o aceite visual e eventos reais de energia seguem pendentes.
 
 ## Incremento 3 — persistência e recuperação
 
@@ -142,8 +142,8 @@ python -m pytest tests/test_clock.py tests/test_timer.py tests/test_repository.p
 
 Os testes verificam a fronteira de persistência e a saída abrupta do processo;
 não simulam queda física de energia nem defeito do dispositivo de armazenamento.
-Agendamento dos callbacks, diálogos de erro e eventos Windows ainda precisam de
-integração e validação na UI. O build continua condicionado à geração do pacote.
+O incremento 4 integra callbacks e diálogos; sua validação visual nativa e os
+eventos Windows continuam pendentes. O build depende da geração do pacote.
 
 Validação do incremento em 30/10/2026, no runtime temporário Python 3.12.10 x64:
 `python -m pytest --basetemp .pytest_cache/persistence-final` aprovou 153 testes,
@@ -151,3 +151,37 @@ com um smoke test pulado por ausência de build. `python -m ruff check .`,
 `python -m ruff format --check .`, `python -m mypy` e `git diff --check` passaram.
 `python -m pip check` não pôde executar: esse runtime não contém o módulo pip.
 Dependências e locks não foram alterados nesta etapa.
+
+## Incremento 4 — interface do cronômetro
+
+`test_ui_states.py` carrega Application e TimerView reais com widgets, diálogos
+e fila after simulados, preservando TimerService, ClockService e SQLite reais.
+Não usa banco pessoal, `sleep` ou relógio real. Executar:
+
+```powershell
+python -m pytest tests/test_ui_states.py tests/test_timer.py tests/test_recovery.py
+```
+
+Cobre ciclo pelos callbacks dos botões, 250 ms/5 s, estado e bloqueio do nome,
+tempo acumulado após retomada, navegação, pausa por lacuna, escolhas do diálogo
+de recuperação, erros privados, falhas de início/retomada/pausa/finalização/
+heartbeat/fechamento, repetição sem tempo extra, falha da fonte e cancelamento dos
+callbacks ao fechar. O teste de recuperação usa a mesma composição de serviço
+recuperado que a entrada real.
+
+Esses testes não comprovam renderização, foco, modalidade nativa, escala DPI ou
+janela mínima. No Windows com Python 3.12 x64 e Tcl/Tk, validar manualmente:
+
+1. Iniciar, pausar, aguardar, retomar e finalizar; conferir total e nome bloqueado.
+2. Navegar para Histórico durante contagem e voltar sem perder estado.
+3. Fechar durante contagem e reabrir; testar as três escolhas da recuperação.
+4. Confirmar nome inválido, falhas de gravação e nova tentativa sem anúncio de sucesso.
+5. Conferir legibilidade, diálogos e botões em 900×600 e escala do Windows.
+
+O runtime temporário de validação continua sem Tcl/Tk e pip: não permite aceite
+visual nem `pip check`. Não foram alteradas dependências ou locks.
+
+Validação automatizada do incremento: Python 3.12.10 x64,
+`python -m pytest --basetemp .pytest_cache/ui-final`: 169 aprovados e um smoke test
+de build pulado por ausência de pacote. `python -m ruff check .`,
+`python -m ruff format --check .`, `python -m mypy` e `git diff --check` passaram.

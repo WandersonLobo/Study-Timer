@@ -30,11 +30,11 @@ consulta da sessão pendente. O relógio confiável também está implementado, 
 âncora única, duração monotônica, validação de ticks e congelamento seguro.
 O ciclo de sessões funciona sem interface: início, pausa, retomada, finalização,
 heartbeat e recuperação com transações atômicas. A composição recupera a sessão
-antes de criar a janela. As ações da interface estão desabilitadas.
+antes de criar a janela. A interface já executa o ciclo de sessão e salva pausa ao fechar.
 
-Relatórios ainda levantam `NotImplementedError`. Não há contagem, gravação de
-sessões ou agendamento de ticks/heartbeats pela UI. `recovered` e `idle` são
-estados visuais, nunca valores persistidos; sua apresentação continua pendente.
+Relatórios ainda levantam `NotImplementedError`. Application agenda ticks e
+heartbeats e apresenta erros e recuperação. `recovered` e `idle` são estados
+visuais, nunca valores persistidos. O aceite visual nativo permanece pendente.
 
 ## Decisões preservadas da especificação
 
@@ -90,22 +90,20 @@ de propagar a exceção; o log contém somente motivo e tipo da falha.
 1. **Implementado:** início e retomada capturam a âncora antes de inserir o intervalo,
    gravam sua parte civil inteira e iniciam o relógio somente após COMMIT com a
    **mesma** âncora. Falhas de escrita não iniciam um novo relógio.
-2. **Pendente:** callbacks de aproximadamente 250 ms devem chamar `ClockService.tick()`.
-   **Implementado:** `TimerService.heartbeat()` persiste o snapshot já validado,
-   sem substituir os ticks. Seu agendamento de aproximadamente 5 s depende da UI.
+2. **Implementado:** Application usa `after(250)` para chamar `TimerService.tick()`,
+   que delega ao relógio. Um callback independente de 5 s chama heartbeat.
 3. **Implementado:** a pausa USER valida um último tick antes de congelar. Suspensão,
    falha de escrita e encerramento conservador congelam o último tick confiável
    sem ler a fonte. Se o relógio já detectou anomalia, seu motivo inicial é preservado.
-4. **Comando implementado, agendamento pendente:** quando o relógio parar sozinho,
-   o chamador deverá acionar `pause_session(clock.pause_reason)` imediatamente
-   para persistir o intervalo e paused. O heartbeat também persiste essa pausa
-   se encontrar o relógio congelado. O relógio não altera o banco por conta própria.
+4. **Implementado:** TimerService.tick persiste imediatamente a pausa automática.
+   O heartbeat também persiste essa pausa se encontrar o relógio congelado.
+   O relógio não altera o banco por conta própria.
 5. **Implementado:** retomada exige novo intervalo e nova âncora, preservando a
    sessão. Finalização limpa o relógio somente após confirmar o banco.
 6. **Pendente:** relatórios ao vivo receberão snapshot somente enquanto o intervalo
    estiver aberto. Após a pausa persistida, usarão os intervalos fechados e `now=None`.
 
-A UI ainda não chama esses comandos nem agenda os ticks.
+A UI chama esses comandos pela janela, sem SQL nem acesso à conexão.
 O relógio não pode inferir uma UTC correta se o horário civil já estiver errado
 no início. A detecção conservadora também pode descartar tempo de estudo durante
 um bloqueio prolongado do sistema, conforme a especificação.
@@ -119,7 +117,7 @@ um bloqueio prolongado do sistema, conforme a especificação.
   produzir timestamps diferentes na virada de um segundo. A âncora reutilizável
   evita essa inconsistência na integração transacional.
 - A documentação anterior tratava toda a validação temporal como pendente.
-  Agora distingue o relógio concluído da integração e persistência ainda pendentes.
+  A integração e a persistência foram implementadas nos incrementos 2 a 4.
 
 ## Ciclo básico da sessão — incremento 2
 
@@ -176,8 +174,8 @@ mas o relógio correspondente está congelado, o heartbeat fecha o intervalo no
 snapshot congelado e grava paused atomicamente. Isso cobre pausas detectadas
 pelo relógio e uma nova tentativa após falha de persistência. Não há retomada automática.
 
-O chamador deverá agendar ticks de aproximadamente 250 ms e heartbeats de 5 s
-na integração da UI. O heartbeat não substitui ticks ausentes nem impõe sozinho
+Application agenda ticks de aproximadamente 250 ms e heartbeats de 5 s.
+O heartbeat não substitui ticks ausentes nem impõe sozinho
 uma cadência. `last_seen_at` é um checkpoint de duração da aplicação, distinto
 do checkpoint interno do WAL.
 
@@ -196,7 +194,7 @@ Não captura hora civil nem reutiliza uma origem monotônica de outro processo.
 
 Sessões já paused, sessões finished e ausência de pendência são preservadas.
 Repetir a recuperação não adiciona intervalos nem duração. O retorno é Session
-paused ou None; `recovered` permanece apenas uma apresentação futura da UI.
+paused ou None; `recovered` é uma apresentação da UI para a pendência na abertura.
 Uma nova contagem exige `resume_session()`, com novo intervalo e nova âncora.
 
 Após encerramento abrupto, recupera-se somente o último checkpoint confirmado.
@@ -232,6 +230,44 @@ Repetir pausa/finalização salva o mesmo corte. Repetir heartbeat após uma fal
 salva esse corte como paused, sem finalizar nem retomar. Se o processo for fechado
 antes de uma tentativa bem-sucedida, prevalece o último checkpoint em disco.
 
+## Integração do Cronômetro — incremento 4
+
+`TimerView` recebe callbacks da `Application`, sem serviços ou SQL. A janela
+coordena comandos, navegação, diálogos e dois callbacks `after`: tick a cada
+250 ms e heartbeat a cada 5 s. Navegar para Histórico conserva os callbacks.
+Não há threads acessando Tk ou a conexão SQLite.
+
+`TimerService.tick()` valida tempo e persiste uma pausa detectada pelo relógio.
+`get_elapsed_seconds()` soma os intervalos da sessão pendente, substituindo o
+checkpoint aberto pelo snapshot correspondente uma única vez. A tela somente
+formata HH:MM:SS; não calcula duração ou consulta a fonte de relógio.
+
+| Estado | Iniciar/Retomar | Pausar | Finalizar | Nome |
+| --- | --- | --- | --- | --- |
+| idle | Iniciar | Desabilitado | Desabilitado | Editável |
+| running | Desabilitado | Habilitado | Habilitado | Bloqueado |
+| paused/recovered | Retomar | Desabilitado | Habilitado | Bloqueado |
+| Falha com running ainda persistido | Desabilitado | Tentar salvar pausa | Habilitado para repetir | Bloqueado |
+
+O estado visual usa a contagem real, não apenas running no banco. `_failed`
+indica operação não confirmada, inclusive falhas de leitura ou da fonte. A janela
+congela via `freeze()`, registra apenas código e tipo, e mostra erro estático sem
+nome, caminho ou traceback. Não tenta gravar repetidamente a cada callback após
+erro: o usuário pode repetir pausa/finalização ou fechamento. Início/retomada
+que falham mantêm seu botão disponível conforme o estado persistido. A sinalização
+só é removida após comando bem-sucedido; nenhuma falha anuncia dados salvos.
+
+Na abertura, uma pendência recuperada ou já pausada aparece como recovered.
+O diálogo oferece Sim (retomar), Não (finalizar) e Cancelar (manter pausada), com
+Cancelar como padrão. Não abre novo intervalo antes da escolha explícita.
+
+`WM_DELETE_WINDOW` chama `on_close()`: se running, salva o último tick aceito
+como pausa SHUTDOWN, sem capturar tempo não confirmado. Só depois do COMMIT
+cancela callbacks e destrói a janela. Se falhar, a janela e o snapshot permanecem
+disponíveis; nova tentativa usa o mesmo corte. Sessão já pausada ou ausência de
+sessão permitem fechar diretamente. Eventos reais de energia ainda pertencem à
+próxima etapa; não são equivalentes ao fechamento normal.
+
 ## Banco e evolução
 
 O [schema.sql](../app/database/schema.sql) foi reconstruído das seções 11–12 do
@@ -252,9 +288,9 @@ regra for implementada. A conexão não deve escapar para a camada visual.
 ## Próximas etapas
 
 1. Validar as dependências em Python 3.12 x64 e fixar o patch de build aprovado.
-2. Integrar os comandos, ticks/heartbeats e falhas de escrita à tela Cronômetro.
-3. Integrar eventos Windows de suspensão/retomada e fechamento seguro da janela.
+2. Validar visualmente o ciclo e os diálogos em Windows com Tcl/Tk.
+3. Integrar eventos Windows de suspensão/retomada; fechamento normal já salva pausa.
 4. Implementar relatórios e fronteiras locais, incluindo DST e mudança de fuso.
-5. Conectar as duas telas, estados visuais, modais e calendário mensal.
+5. Conectar os relatórios e o calendário mensal à tela Histórico.
 6. Incorporar SVGs aprovados e substituir o ícone provisório.
 7. Executar a matriz de aceite, build e teste em Windows sem Python instalado.

@@ -2,7 +2,9 @@
 
 Revisão inicial em 29/10/2026; persistência e recuperação atualizadas em 30/10/2026.
 O app continua local, sem login, sincronização ou exportação CSV. O cronômetro e
-o tratamento de falhas funcionam pelos serviços; a integração visual está pendente.
+o tratamento de falhas funcionam pelos serviços e pela tela Cronômetro.
+Erros em callbacks usam mensagens estáticas e logs sem detalhes privados.
+O fechamento mantém a janela aberta quando a pausa não pode ser confirmada.
 
 ## Correções aplicadas
 
