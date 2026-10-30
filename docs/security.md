@@ -1,8 +1,8 @@
 # Segurança e privacidade
 
-Verificação realizada em 29/10/2026, limitada ao esqueleto existente. O app continua
-local, sem login, sincronização ou exportação CSV. As regras do cronômetro e seus
-fluxos de erro ainda serão implementados.
+Revisão inicial em 29/10/2026; persistência e recuperação atualizadas em 30/10/2026.
+O app continua local, sem login, sincronização ou exportação CSV. O cronômetro e
+o tratamento de falhas funcionam pelos serviços; a integração visual está pendente.
 
 ## Correções aplicadas
 
@@ -32,6 +32,14 @@ fluxos de erro ainda serão implementados.
 - Falhas de inicialização mostram texto estático sem caminhos ou tracebacks.
   Logs usam códigos e tipos de exceção, sem interpolar nome ou conteúdo de sessão.
   A rotação permanece em 1 MiB com três arquivos anteriores.
+- Heartbeat grava apenas snapshots validados, com rollback em falhas. Erros SQLite
+  congelam a contagem, propagam e mantêm `persistence_failed=True` até um comando
+  confirmado; não se anuncia sucesso por apenas conservar dados em memória.
+  O log registra `PERSISTENCE_FAILED` e o tipo, sem detalhes privados da exceção.
+- Antes de criar a janela, a recuperação fecha a sessão interrompida exatamente
+  em `last_seen_at` e mantém paused, sem acrescentar o tempo com o app fechado.
+  Falha na recuperação impede a abertura normal. Não há reparo destrutivo nem
+  retomada automática; ticks ainda não confirmados podem ser perdidos em um crash.
 - O build usa uma venv nova e uma cópia de fontes em pasta neutra, fora do perfil
   e do OneDrive. O pacote e o ZIP extraído são inspecionados para bloquear bancos,
   logs, backups, CSVs, links simbólicos e caminhos privados detectáveis.

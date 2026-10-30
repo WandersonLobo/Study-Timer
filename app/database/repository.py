@@ -186,6 +186,43 @@ class StudyRepository:
             session = self._require_session(session_id, SessionStatus.FINISHED)
         return session
 
+    def save_checkpoint(self, session_id: int, snapshot: ClockSnapshot) -> None:
+        """Confirma somente o último tick aceito, sem fechar o intervalo.
+
+        Não consulta a hora civil e rejeita snapshots inconsistentes ou anteriores
+        ao checkpoint já persistido. Uma exceção significa que não houve COMMIT.
+        """
+        with self.transaction() as database:
+            self._require_session(session_id, SessionStatus.RUNNING)
+            interval = self._validate_snapshot(session_id, snapshot)
+            database.execute(
+                "UPDATE study_intervals SET last_seen_at = ? WHERE id = ?",
+                (snapshot.valid_until_utc_s, interval.id),
+            )
+
+    def recover_pending(self) -> Session | None:
+        """Recupera running como paused exatamente no checkpoint persistido.
+
+        É idempotente: sessões paused e ausência de pendência não mudam. Todo o
+        fechamento ocorre em uma transação, sem usar a hora de abertura do app.
+        """
+        with self.transaction() as database:
+            session = self.get_pending_session()
+            if session is not None and session.status == SessionStatus.RUNNING:
+                interval = self.get_open_interval(session.id)
+                if interval is None:
+                    raise sqlite3.IntegrityError("Sessão running sem intervalo aberto.")
+                database.execute(
+                    "UPDATE study_intervals SET ended_at = last_seen_at WHERE id = ?",
+                    (interval.id,),
+                )
+                database.execute(
+                    "UPDATE sessions SET status = ? WHERE id = ?",
+                    (SessionStatus.PAUSED.value, session.id),
+                )
+                session = self._require_session(session.id, SessionStatus.PAUSED)
+        return session
+
     def _open_interval(self, session_id: int, started_at: int) -> StudyInterval:
         """Insere o intervalo antes de alterar o status, dentro da transação do chamador."""
         self._connection.execute(
@@ -202,6 +239,14 @@ class StudyRepository:
 
     def _close_interval(self, session_id: int, snapshot: ClockSnapshot) -> None:
         """Valida a identidade e os limites sintéticos antes de encerrar o intervalo."""
+        interval = self._validate_snapshot(session_id, snapshot)
+        self._connection.execute(
+            "UPDATE study_intervals SET last_seen_at = ?, ended_at = ? WHERE id = ?",
+            (snapshot.valid_until_utc_s, snapshot.valid_until_utc_s, interval.id),
+        )
+
+    def _validate_snapshot(self, session_id: int, snapshot: ClockSnapshot) -> StudyInterval:
+        """Compartilha a mesma validação entre checkpoints e fechamento."""
         interval = self.get_open_interval(session_id)
         if (
             interval is None
@@ -212,10 +257,7 @@ class StudyRepository:
             or snapshot.valid_until_utc_s < interval.last_seen_at
         ):
             raise ValueError("Snapshot incompatível com o intervalo aberto ou seu checkpoint.")
-        self._connection.execute(
-            "UPDATE study_intervals SET last_seen_at = ?, ended_at = ? WHERE id = ?",
-            (snapshot.valid_until_utc_s, snapshot.valid_until_utc_s, interval.id),
-        )
+        return interval
 
     def _require_session(self, session_id: int, status: SessionStatus) -> Session:
         """Exige o estado esperado sem aceitar transições implícitas ou sessões ausentes."""

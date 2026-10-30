@@ -6,7 +6,8 @@ O projeto é um aplicativo desktop Windows 10/11 x64, offline e com duas telas.
 ## Dependências entre camadas
 
 `main.py` é a raiz de composição: resolve caminhos, configura logs, inicializa
-SQLite e injeta repositório e relógio nos serviços antes de abrir a janela.
+SQLite, injeta repositório e relógio nos serviços e recupera a sessão pendente
+antes de abrir a janela.
 
 - [application.py](../app/application.py) e [ui/](../app/ui/): navegação e widgets.
   Recebem serviços; não executam SQL nem calculam duração.
@@ -27,12 +28,13 @@ Implementado: composição das camadas, navegação inicial, configuração loca
 logging, criação do banco, PRAGMAs, esquema, validação transacional básica e
 consulta da sessão pendente. O relógio confiável também está implementado, com
 âncora única, duração monotônica, validação de ticks e congelamento seguro.
-O ciclo básico de sessões também funciona sem interface: início, pausa, retomada
-e finalização com transações atômicas. As ações da interface estão desabilitadas.
+O ciclo de sessões funciona sem interface: início, pausa, retomada, finalização,
+heartbeat e recuperação com transações atômicas. A composição recupera a sessão
+antes de criar a janela. As ações da interface estão desabilitadas.
 
-Heartbeat, recuperação de processo e relatórios ainda levantam `NotImplementedError`.
-Não há contagem, gravação de sessões pela UI, recuperação automática ou relatórios
-prontos. `recovered` e `idle` são estados visuais, nunca valores persistidos.
+Relatórios ainda levantam `NotImplementedError`. Não há contagem, gravação de
+sessões ou agendamento de ticks/heartbeats pela UI. `recovered` e `idle` são
+estados visuais, nunca valores persistidos; sua apresentação continua pendente.
 
 ## Decisões preservadas da especificação
 
@@ -89,13 +91,15 @@ de propagar a exceção; o log contém somente motivo e tipo da falha.
    gravam sua parte civil inteira e iniciam o relógio somente após COMMIT com a
    **mesma** âncora. Falhas de escrita não iniciam um novo relógio.
 2. **Pendente:** callbacks de aproximadamente 250 ms devem chamar `ClockService.tick()`.
-   O heartbeat de 5 s deverá persistir o snapshot já validado; não substituirá os ticks.
+   **Implementado:** `TimerService.heartbeat()` persiste o snapshot já validado,
+   sem substituir os ticks. Seu agendamento de aproximadamente 5 s depende da UI.
 3. **Implementado:** a pausa USER valida um último tick antes de congelar. Suspensão,
    falha de escrita e encerramento conservador congelam o último tick confiável
    sem ler a fonte. Se o relógio já detectou anomalia, seu motivo inicial é preservado.
 4. **Comando implementado, agendamento pendente:** quando o relógio parar sozinho,
-   o chamador deverá acionar `pause_session(clock.pause_reason)` para persistir o
-   intervalo e paused. O relógio não altera o banco por conta própria.
+   o chamador deverá acionar `pause_session(clock.pause_reason)` imediatamente
+   para persistir o intervalo e paused. O heartbeat também persiste essa pausa
+   se encontrar o relógio congelado. O relógio não altera o banco por conta própria.
 5. **Implementado:** retomada exige novo intervalo e nova âncora, preservando a
    sessão. Finalização limpa o relógio somente após confirmar o banco.
 6. **Pendente:** relatórios ao vivo receberão snapshot somente enquanto o intervalo
@@ -148,13 +152,85 @@ respeita o maior término, sem reescrever o histórico.
 Se pausar ou finalizar falhar, o banco sofre rollback e o relógio permanece
 congelado com seu snapshot. Repetir o comando usa esse mesmo corte, excluindo
 o tempo até a nova tentativa. Em falha de início/retomada, o novo relógio não é
-iniciado. Exceções são propagadas; diálogos, política completa de tentativa e
-recuperação após reinício continuam para os próximos incrementos.
+iniciado. O incremento 3 sinaliza essas falhas e permite repetir a escrita sem
+retomar a contagem. Diálogos e ações visuais de tentativa pertencem à integração da UI.
 
 Uma sessão running carregada sem um relógio correspondente é rejeitada pelos
-comandos de pausa/finalização, exigindo recuperação. Não se usa a hora de reabrir
-como término nem se encerra silenciosamente no checkpoint neste incremento.
+comandos de pausa/finalização, exigindo recuperação. O incremento 3 adiciona o
+comando explícito de recuperação e sua chamada na abertura; não usa a hora de reabrir.
 Sessões paused podem ser retomadas ou finalizadas com novas instâncias dos serviços.
+
+## Persistência e recuperação — incremento 3
+
+### Checkpoint de duração
+
+`TimerService.heartbeat()` consulta o snapshot já aceito por `ClockService.tick()`.
+Não lê a fonte de tempo, não confirma ticks e não consulta a hora civil. Enquanto
+o relógio roda, `StudyRepository.save_checkpoint(session_id, snapshot)` atualiza
+somente `last_seen_at` do intervalo aberto. A mesma validação de identidade,
+âncora, duração e não regressão é usada no fechamento. Repetir um checkpoint é
+seguro e não altera intervalos anteriores, o início ou o status da sessão.
+
+Sem sessão running, o heartbeat não escreve. Se a sessão está running no banco
+mas o relógio correspondente está congelado, o heartbeat fecha o intervalo no
+snapshot congelado e grava paused atomicamente. Isso cobre pausas detectadas
+pelo relógio e uma nova tentativa após falha de persistência. Não há retomada automática.
+
+O chamador deverá agendar ticks de aproximadamente 250 ms e heartbeats de 5 s
+na integração da UI. O heartbeat não substitui ticks ausentes nem impõe sozinho
+uma cadência. `last_seen_at` é um checkpoint de duração da aplicação, distinto
+do checkpoint interno do WAL.
+
+### Recuperação na abertura
+
+`main.run_application()` chama `TimerService.recover_pending()` após inicializar
+o banco e antes de criar a janela. O serviço exige relógio parado **sem snapshot**,
+evitando descartar tempo congelado que ainda pode ser salvo no processo atual.
+Não captura hora civil nem reutiliza uma origem monotônica de outro processo.
+
+`StudyRepository.recover_pending()` executa em `BEGIN IMMEDIATE`:
+
+1. Consulta a única sessão pendente dentro da transação.
+2. Se running, fecha seu intervalo com `ended_at = last_seen_at` e muda para paused.
+3. Valida as invariantes e retorna somente depois do COMMIT.
+
+Sessões já paused, sessões finished e ausência de pendência são preservadas.
+Repetir a recuperação não adiciona intervalos nem duração. O retorno é Session
+paused ou None; `recovered` permanece apenas uma apresentação futura da UI.
+Uma nova contagem exige `resume_session()`, com novo intervalo e nova âncora.
+
+Após encerramento abrupto, recupera-se somente o último checkpoint confirmado.
+Ticks posteriores ainda em memória são descartados; o período com o programa
+fechado nunca é acrescentado. Se não houve heartbeat, o intervalo recuperado tem
+zero segundos. Falha na recuperação sofre rollback e impede a abertura da janela;
+o tratamento de inicialização mostra uma mensagem estática sem anunciar sucesso.
+O esquema permanece na versão 1, sem migração ou reconstrução de bancos existentes.
+
+### Falhas e confirmação de gravação
+
+Todos os comandos de persistência do TimerService propagam `sqlite3.Error` e
+congelam o relógio com WRITE_FAILURE, preservando um motivo de pausa anterior.
+Isso também cobre falha de leitura durante um comando, antes de sua escrita.
+O snapshot confiável permanece em memória para nova tentativa; nenhuma amostra
+é aceita durante a espera. Falhas de início/retomada não iniciam novo intervalo
+no relógio; falhas de pausa/finalização/heartbeat não confirmam um novo estado.
+
+`persistence_failed` é uma propriedade somente de leitura: fica True após falha
+SQLite e só volta a False quando um comando de persistência termina confirmado.
+Uma consulta ou heartbeat sem trabalho não a limpa. O banco pode continuar
+running por causa do rollback enquanto o relógio está parado; esse status não
+autoriza a UI a anunciar contagem ativa ou dados salvos.
+
+O chamador deve tratar a exceção e apresentar mensagem estática, por exemplo:
+“Não foi possível salvar. A contagem foi interrompida. Tente novamente.” Só deve
+anunciar pausa, finalização ou recuperação salvas após o respectivo retorno.
+`persistence_failed=False` não significa que todo tick em memória já foi gravado:
+checkpoints são periódicos. Logs registram `PERSISTENCE_FAILED` e o tipo da
+exceção, sem seu texto, nomes de sessões, SQL ou caminhos privados.
+
+Repetir pausa/finalização salva o mesmo corte. Repetir heartbeat após uma falha
+salva esse corte como paused, sem finalizar nem retomar. Se o processo for fechado
+antes de uma tentativa bem-sucedida, prevalece o último checkpoint em disco.
 
 ## Banco e evolução
 
@@ -176,8 +252,8 @@ regra for implementada. A conexão não deve escapar para a camada visual.
 ## Próximas etapas
 
 1. Validar as dependências em Python 3.12 x64 e fixar o patch de build aprovado.
-2. Implementar heartbeat sobre o relógio e o ciclo de sessões já validados.
-3. Implementar recuperação, tratamento de falhas de escrita e eventos Windows.
+2. Integrar os comandos, ticks/heartbeats e falhas de escrita à tela Cronômetro.
+3. Integrar eventos Windows de suspensão/retomada e fechamento seguro da janela.
 4. Implementar relatórios e fronteiras locais, incluindo DST e mudança de fuso.
 5. Conectar as duas telas, estados visuais, modais e calendário mensal.
 6. Incorporar SVGs aprovados e substituir o ícone provisório.

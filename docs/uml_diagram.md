@@ -63,9 +63,10 @@ classDiagram
     }
 
     class TimerService {
-        <<partial>>
         -_repository: StudyRepository
         -_clock: ClockService
+        -_persistence_failed: bool
+        +persistence_failed: bool
         +__init__(repository: StudyRepository, clock: ClockService)
         +start_session(name: str) Session
         +pause_session(reason: PauseReason) Session
@@ -74,9 +75,11 @@ classDiagram
         +recover_pending() Session | None
         +heartbeat() None
         +get_active_session() Session | None
+        -_persistence_operation() Iterator~None~
         -_require_active_session(status: SessionStatus) Session
         -_require_stopped_clock() None
         -_freeze_interval(session_id: int, reason: PauseReason) ClockSnapshot
+        -_require_snapshot(session_id: int) ClockSnapshot
     }
     class ReportService {
         <<contract>>
@@ -123,8 +126,11 @@ classDiagram
         +resume_session(session_id: int, started_at: int) SessionIntervalPair
         +pause_session(session_id: int, snapshot: ClockSnapshot) Session
         +finish_session(session_id: int, snapshot: ClockSnapshot | None) Session
+        +save_checkpoint(session_id: int, snapshot: ClockSnapshot) None
+        +recover_pending() Session | None
         -_open_interval(session_id: int, started_at: int) StudyInterval
         -_close_interval(session_id: int, snapshot: ClockSnapshot) None
+        -_validate_snapshot(session_id: int, snapshot: ClockSnapshot) StudyInterval
         -_require_session(session_id: int, status: SessionStatus) Session
         -_session_from_row(row: SQLiteRow) Session
         -_interval_from_row(row: SQLiteRow) StudyInterval
@@ -148,7 +154,7 @@ classDiagram
     StudyRepository --> SQLiteConnection : _connection
 
     note for Application "Mantém as duas telas e os serviços ao navegar."
-    note for TimerService "Ciclo basico implementado. Heartbeat e recuperacao permanecem contratos."
+    note for TimerService "Ciclo, heartbeat e recuperacao implementados. Falha SQLite congela, sinaliza e propaga; sucesso exige COMMIT."
     note for StudyRepository "Cada comando de escrita possui BEGIN IMMEDIATE, validacao e COMMIT ou rollback integral."
     note for ReportService "Consultas agregadas ainda não implementadas."
     note for ClockService "Implementado. Somente tick aceita tempo; pausa preserva o ultimo snapshot e seu motivo."
@@ -168,6 +174,8 @@ ou classes no código:
 
 O método `transaction()` é decorado com `@contextmanager`: sua anotação é
 `Iterator[sqlite3.Connection]`, mas o chamador o utiliza com `with`.
+`TimerService._persistence_operation()` também é um gerenciador de contexto,
+anotado como `Iterator[None]`; sinaliza erros SQLite sem executar SQL.
 `SystemClock` não herda explicitamente de `ClockSource`; o método `read()` com
 a assinatura compatível satisfaz o protocolo por tipagem estrutural.
 
@@ -183,6 +191,20 @@ gravada no intervalo. O nome é normalizado antes de amostrar o relógio e tamb�
 na fronteira de escrita do repositório. `finish_session()` do repositório aceita
 `snapshot=None` como padrão, permitido somente quando a sessão está paused.
 Os dois conversores de linhas do repositório são métodos estáticos internos.
+
+`persistence_failed` é uma propriedade somente de leitura. Uma falha SQLite em
+um comando congela o relógio, preserva o primeiro motivo da pausa e sinaliza a
+falha; consultas e heartbeat sem trabalho não a limpam. O estado running ainda
+pode existir no banco após rollback, com relógio parado e dados não confirmados.
+Um comando confirmado resolve a indicação; não garante que ticks futuros já
+estejam em disco. O chamador deve tratar exceções antes de anunciar sucesso.
+
+`heartbeat()` não lê relógios: salva `last_seen_at` usando o snapshot validado.
+Se o relógio correspondente estiver congelado, fecha o intervalo nesse corte e
+grava paused. A recuperação exige relógio sem snapshot do processo atual; fecha
+o intervalo running em `last_seen_at` e retorna paused, sem retomar nem contar
+tempo com o app fechado. Repetir a recuperação não altera a duração. `main`
+chama essa recuperação antes de criar a janela; falha impede a abertura normal.
 
 As telas atuais ainda não recebem serviços diretamente. A janela guarda os
 serviços e cria os widgets; a ligação dos botões aos comandos será feita na
@@ -356,7 +378,7 @@ classDiagram
     MainModule ..> StudyRepository : cria e injeta conexao
     MainModule ..> SystemClock : cria fonte real
     MainModule ..> ClockService : injeta fonte real
-    MainModule ..> TimerService : injeta repositorio e relogio
+    MainModule ..> TimerService : injeta e recupera sessao
     MainModule ..> ReportService : injeta repositorio
     MainModule ..> AlreadyRunningError : trata
     MainModule ..> DatabaseHealthError : trata
@@ -373,7 +395,8 @@ classDiagram
 
 `main()` mantém o lock durante toda a execução. `run_application()` cria uma
 conexão e um repositório compartilhado pelos dois serviços, injeta as dependências
-e fecha a conexão no `finally`, depois do encerramento da janela.
+e recupera a sessão antes de criar a janela. Fecha a conexão no `finally`,
+inclusive quando a recuperação ou a janela falha.
 
 Os parâmetros completos de `SingleInstance.__exit__` são
 `exc_type: type[BaseException] | None`, `exc_value: BaseException | None` e
@@ -410,7 +433,10 @@ validação e backup são abertas e fechadas nos próprios módulos de infraestr
 | Finalização | `finished_at` só existe em `finished` e nunca antecede `created_at`. Usa o maior término confirmado, limitado inferiormente por created_at. Se nenhum intervalo teve tempo positivo, usa created_at, mesmo se houver intervalos de zero segundos retomados depois. |
 | Tempo | Duração por nanossegundos monotônicos; UTC civil é âncora de calendário. O relógio garante `valid_until_utc_s = started_at + elapsed_s` nos snapshots que produz. |
 | Tick inseguro | Lacuna monotônica estritamente maior que 5 s pausa com TICK_GAP. Regressão monotônica ou divergência civil estritamente maior que 5 s pausa com CLOCK_CHANGE. O tick rejeitado não é contabilizado. |
-| Pausa do relógio | `pause()` não lê a fonte e congela o último tick aceito. TimerService já persiste esse snapshot e o status paused atomicamente quando seu comando de pausa é chamado. O agendamento dos ticks e a integração automática da UI permanecem pendentes. |
+| Pausa do relógio | `pause()` não lê a fonte e congela o último tick aceito. TimerService persiste esse snapshot e paused via pausa explícita ou heartbeat com relógio congelado. O agendamento dos callbacks e a integração da UI permanecem pendentes. |
+| Checkpoint | Heartbeat grava somente o último snapshot validado em last_seen_at, sem ler a fonte, regredir o checkpoint ou fechar um relógio ainda ativo. |
+| Recuperação | Antes da janela, fecha o intervalo running em last_seen_at e grava paused atomicamente. Não consulta a hora de reabrir, não retoma e preserva sessões já pausadas/finalizadas. |
+| Falha de persistência | Exceção SQLite congela o snapshot e sinaliza persistence_failed. Rollback não confirma pausa ou finalização. Repetição segura exige COMMIT; heartbeat sem trabalho não limpa o erro. |
 | Estado visual | `idle` não possui sessão pendente; `running` corresponde a sessão running; `paused` e `recovered` correspondem a sessão paused. Integração visual ainda pendente. |
 | Relatórios | Somam segundos antes de formatar minutos, dividem intervalos por fronteiras locais e evitam dupla soma do intervalo aberto. Implementação pendente. |
 | Persistência | WAL, synchronous FULL, FKs e transações explícitas; SQL parametrizado e validação antes do COMMIT. |
@@ -421,10 +447,11 @@ validação e backup são abertas e fechadas nos próprios módulos de infraestr
 - **Implementado:** modelos, enumerações, fonte `SystemClock`, relógio com âncora,
   validação de ticks, snapshots e pausa conservadora; consulta de sessão
   pendente, transações e invariantes do repositório, inicialização e saúde do banco,
-  ciclo básico de sessões e intervalos com escritas atômicas; backups/restauração,
+  ciclo de sessões e intervalos, heartbeat, recuperação na abertura e sinalização
+  de falhas com escritas atômicas; backups/restauração,
   lock de instância, logs e navegação estrutural entre duas telas.
-- **Contratos ainda pendentes:** heartbeat, recuperação de processo,
-  agendamento da persistência das pausas detectadas pelo relógio, relatórios e integração dos estados
+- **Contratos ainda pendentes:** agendamento de ticks/heartbeats e da persistência
+  imediata das pausas detectadas pelo relógio, relatórios e integração dos estados
   visuais, modais e calendário.
 - **Integração Windows pendente:** eventos de suspensão e retomada devem alimentar
   o fluxo de pausa segura. Ainda não existe uma classe adaptadora para esses eventos;

@@ -386,11 +386,13 @@ def test_real_commit_failure_rolls_back_all_rows_and_preserves_safe_clock_for_re
         tuple(row) for row in connection.execute("SELECT * FROM study_intervals")
     ] == before_intervals
     assert not connection.in_transaction and not clock.is_running
+    assert timer.persistence_failed
     if operation in ("pause", "finish"):
         snapshot = clock.get_snapshot()
         assert snapshot is not None and snapshot.elapsed_s == 3
         source.advance(3600 * SECOND_NS)
     result = command()
+    assert not timer.persistence_failed
     if operation in ("pause", "finish"):
         assert session is not None
         assert completed_seconds(repository, session.id) == 3

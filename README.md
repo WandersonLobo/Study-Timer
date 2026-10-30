@@ -4,10 +4,14 @@ Aplicativo desktop de estudos para Windows 10/11 x64, feito com Python 3.12,
 CustomTkinter e SQLite. Dados locais, uso offline e somente duas telas:
 Cronômetro e Histórico. Baseado na especificação técnica v1.1 revisada.
 
-**Estado atual: relógio confiável e ciclo básico de sessões.** Iniciar, pausar,
-retomar e finalizar já funcionam pelos serviços e testes com SQLite. Heartbeat,
-recuperação, relatórios e calendário ainda serão implementados. A navegação
-estrutural existe; os botões de sessão permanecem desabilitados até a integração da UI.
+**Estado atual: relógio, ciclo de sessões, checkpoints e recuperação.** Iniciar,
+pausar, retomar, finalizar e salvar checkpoints funcionam pelos serviços e testes
+com SQLite. Ao abrir, uma sessão interrompida é recuperada como pausada até o
+último checkpoint confirmado, excluindo o tempo com o programa fechado. Falhas
+de persistência interrompem a contagem e são sinalizadas sem confirmar dados.
+Relatórios, calendário e agendamento dos ticks/heartbeats na UI ainda estão
+pendentes. A navegação estrutural existe; os botões de sessão permanecem
+desabilitados até a integração da UI.
 Não é uma versão de uso.
 
 ## Estrutura
@@ -43,7 +47,7 @@ Study-Timer/
 │   │   └── startup_dialog.py      # Erros sem caminhos privados
 │   ├── services/
 │   │   ├── clock_service.py       # Fonte de relógio injetável
-│   │   ├── timer_service.py       # Contratos do cronômetro
+│   │   ├── timer_service.py       # Sessões, checkpoints e recuperação
 │   │   └── report_service.py      # Contratos dos relatórios
 │   └── database/
 │       ├── connection.py          # Conexão e PRAGMAs

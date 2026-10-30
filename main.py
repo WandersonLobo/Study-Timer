@@ -53,6 +53,7 @@ def run_application(paths: AppPaths) -> None:
         repository = StudyRepository(connection)
         clock = ClockService(SystemClock())
         timer = TimerService(repository, clock)
+        timer.recover_pending()
         reports = ReportService(repository)
         application = Application(timer, reports)
         application.mainloop()
