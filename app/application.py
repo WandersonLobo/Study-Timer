@@ -13,6 +13,7 @@ from app.services.report_service import ReportService
 from app.services.timer_service import TimerService
 from app.ui.history_view import HistoryView
 from app.ui.timer_view import TimerView
+from app.windows_power import WindowsPowerMonitor
 
 
 class Application(ctk.CTk):
@@ -21,6 +22,7 @@ class Application(ctk.CTk):
     def __init__(self, timer: TimerService, reports: ReportService) -> None:
         super().__init__()
         self._timer = timer
+        self._power = WindowsPowerMonitor(lambda: timer.freeze(PauseReason.SUSPEND))
         self._reports = reports
         self._session: Session | None = None
         self._state = UIState.IDLE
@@ -57,6 +59,8 @@ class Application(ctk.CTk):
             view.grid(row=0, column=0, sticky="nsew")
         self.show_view("timer")
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.update_idletasks()
+        self._power.start(int(self.winfo_id()))
         self._refresh()
         if self._session is not None:
             self._state = UIState.RECOVERED
@@ -92,8 +96,10 @@ class Application(ctk.CTk):
         if self._closed:
             return
         try:
+            if self._power.take_pending():
+                command = self._timer.pause_for_power
             command()
-            self._failed = False
+            self._failed = self._timer.persistence_failed
             self._refresh()
         except Exception as error:
             self._handle_error(error)
@@ -118,6 +124,8 @@ class Application(ctk.CTk):
         self._tick_job = None
         if self._closed:
             return
+        if self._power.pending:
+            self._run(self._timer.pause_for_power)
         if self._timer.is_running and not self._failed:
             self._run(self._timer.tick)
             if not self._timer.is_running and not self._failed:
@@ -134,6 +142,8 @@ class Application(ctk.CTk):
         self._heartbeat_job = None
         if self._closed:
             return
+        if self._power.pending:
+            self._run(self._timer.pause_for_power)
         if self._timer.is_running and not self._failed:
             self._run(self._timer.heartbeat)
         if not self._closed:
@@ -179,9 +189,12 @@ class Application(ctk.CTk):
         if self._closed:
             return
         try:
+            if self._power.take_pending():
+                self._timer.pause_for_power()
             session = self._timer.get_active_session()
             if session is not None and session.status == SessionStatus.RUNNING:
                 self._timer.pause_session(PauseReason.SHUTDOWN)
+            self._power.close()
         except Exception as error:
             self._handle_error(error)
             return

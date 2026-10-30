@@ -16,6 +16,7 @@ from app.models import SessionStatus
 from app.services.clock_service import ClockService
 from app.services.report_service import ReportService
 from app.services.timer_service import TimerService
+from app.windows_power import WindowsPowerMonitor
 from tests.test_clock import SECOND_NS, FakeClock
 from tests.test_recovery import deny_commit
 from tests.test_timer import completed_seconds
@@ -45,6 +46,10 @@ class Widget:
     minsize = grid
     protocol = grid
     tkraise = grid
+    update_idletasks = grid
+
+    def winfo_id(self) -> int:
+        return 0
 
     def get(self) -> str:
         return self.value
@@ -78,6 +83,7 @@ class Widget:
 
 @pytest.fixture
 def ui_modules(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[ModuleType, Mock]]:
+    monkeypatch.setattr(WindowsPowerMonitor, "start", lambda self, hwnd: None)
     ctk = ModuleType("customtkinter")
     for name in ("CTk", "CTkFrame", "CTkScrollableFrame", "CTkLabel", "CTkButton", "CTkEntry"):
         ctk.__dict__[name] = Widget

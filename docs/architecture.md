@@ -49,7 +49,7 @@ visuais, nunca valores persistidos. O aceite visual nativo permanece pendente.
 7. Ticks de aproximadamente 250 ms e heartbeat de aproximadamente 5 s.
    Lacuna ou divergência civil acima de 5 s deve pausar no último tick válido.
 8. Suspensão Windows deve ser observada por eventos e pelo detector de lacunas.
-   A integração `WM_POWERBROADCAST` ainda precisa ser implementada e testada.
+   `WM_POWERBROADCAST` já está integrado; suspend/hibernate físico ainda exige aceite.
 9. Relatórios usam fronteiras locais meio abertas e somam segundos antes de
    truncar minutos. O mês exibido é independente dos cartões do período atual.
 10. `ClockSnapshot` identifica o intervalo aberto e substitui seu checkpoint uma
@@ -265,8 +265,56 @@ Cancelar como padrão. Não abre novo intervalo antes da escolha explícita.
 como pausa SHUTDOWN, sem capturar tempo não confirmado. Só depois do COMMIT
 cancela callbacks e destrói a janela. Se falhar, a janela e o snapshot permanecem
 disponíveis; nova tentativa usa o mesmo corte. Sessão já pausada ou ausência de
-sessão permitem fechar diretamente. Eventos reais de energia ainda pertencem à
-próxima etapa; não são equivalentes ao fechamento normal.
+sessão permitem fechar diretamente. Eventos de energia também estão integrados;
+o aceite físico no Windows continua necessário.
+
+## Suspensão e retomada Windows — incremento 5
+
+[WindowsPowerMonitor](../app/windows_power.py) usa `SetWindowSubclass` no HWND
+externo do Tk (`GetAncestor(..., GA_ROOT)`) e registra o recebimento com
+`RegisterSuspendResumeNotification(..., DEVICE_NOTIFY_WINDOW_HANDLE)`. O callback
+ctypes permanece referenciado durante todo o registro; HWND, WPARAM, LPARAM,
+LRESULT e identificadores usam tamanhos nativos, preservando a ABI x64.
+Registro, mensagens e remoção executam na thread da janela.
+
+`WM_POWERBROADCAST` com PBT_APMSUSPEND (4), PBT_APMRESUMEAUTOMATIC (18),
+PBT_APMRESUMESUSPEND (7) ou PBT_APMRESUMECRITICAL (6, compatibilidade) apenas:
+
+1. Marca uma pendência agrupada, inclusive em eventos repetidos.
+2. Congela imediatamente o último snapshot aceito com SUSPEND, sem ler a fonte.
+3. Retorna TRUE, sem SQL, widgets, diálogo ou espera dentro do callback nativo.
+
+O próximo tick/heartbeat da Application processa essa pendência **antes** de
+qualquer amostra. `TimerService.pause_for_power()` persiste paused no snapshot
+congelado, somente se a sessão ainda estiver running. Uma ação já enfileirada de
+início/retomada/finalização também drena primeiro a pendência, exigindo novo clique
+para executar sua ação original. O fechamento drena a pausa antes de sair.
+Retomada do Windows sem suspensão recebida também congela antes do próximo tick.
+Nenhum evento de energia abre intervalo ou inicia contagem; somente Retomar o faz.
+
+Eventos em idle, paused ou finished não criam intervalos. Notificações de bateria,
+AC e outras mensagens seguem para `DefSubclassProc`. Mensagens repetidas são
+idempotentes; o primeiro motivo de pausa é preservado. Falhas SQLite mantêm o
+snapshot congelado, sinalizam erro e permitem repetir, sem anunciar dados salvos.
+Uma notificação sem escrita não limpa `persistence_failed` nem sua indicação visual.
+
+Não se grava dentro de WndProc para evitar bloquear o Windows durante a transição.
+Se o processo terminar antes da persistência adiada, a recuperação usa o último
+checkpoint confirmado em disco, descartando o restante; não acrescenta tempo
+suspenso. `ClockService` mantém o detector de lacunas/divergência como proteção
+complementar quando mensagens não forem recebidas.
+
+Antes de destruir a janela, `close()` remove a inscrição e a subclasse. Também
+trata WM_NCDESTROY e instalação parcial; falhas de instalação impedem abertura
+normal, e falhas de remoção permitem nova tentativa antes de destruir a janela.
+Exceções são contidas na fronteira C e os logs usam apenas código/tipo.
+
+Referências primárias: [eventos de energia](https://learn.microsoft.com/en-us/windows/win32/power/wm-powerbroadcast),
+[registro de notificações](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registersuspendresumenotification)
+e [subclasse na thread da janela](https://learn.microsoft.com/en-us/windows/win32/api/commctrl/nf-commctrl-setwindowsubclass).
+Windows não distingue suspensão e hibernação nessas mensagens. Os testes exercitam
+mensagens reais em HWND oculto; suspend/hibernate físico e integração com o wrapper
+Tk ainda exigem aceite no ambiente de destino.
 
 ## Banco e evolução
 
@@ -289,7 +337,7 @@ regra for implementada. A conexão não deve escapar para a camada visual.
 
 1. Validar as dependências em Python 3.12 x64 e fixar o patch de build aprovado.
 2. Validar visualmente o ciclo e os diálogos em Windows com Tcl/Tk.
-3. Integrar eventos Windows de suspensão/retomada; fechamento normal já salva pausa.
+3. Validar suspensão/hibernação física e retomada; eventos e fechamento normal já integrados.
 4. Implementar relatórios e fronteiras locais, incluindo DST e mudança de fuso.
 5. Conectar os relatórios e o calendário mensal à tela Histórico.
 6. Incorporar SVGs aprovados e substituir o ícone provisório.

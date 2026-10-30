@@ -139,9 +139,17 @@ class TimerService:
         """Expõe o estado real da contagem, inclusive após rollback."""
         return self._clock.is_running
 
-    def freeze(self) -> None:
+    def freeze(self, reason: PauseReason = PauseReason.WRITE_FAILURE) -> None:
         """Interrompe a contagem sem anunciar persistência ou descartar o snapshot."""
-        self._clock.pause(PauseReason.WRITE_FAILURE)
+        self._clock.pause(reason)
+
+    def pause_for_power(self) -> None:
+        """Suspensão e retomada usam o mesmo corte, sem ler a fonte ou retomar."""
+        self.freeze(PauseReason.SUSPEND)
+        with self._persistence_operation():
+            session = self.get_active_session()
+            if session is not None and session.status == SessionStatus.RUNNING:
+                self.pause_session(PauseReason.SUSPEND)
 
     def tick(self) -> None:
         """Valida um tick e persiste imediatamente uma pausa automática."""

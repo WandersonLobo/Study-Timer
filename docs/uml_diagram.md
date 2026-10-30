@@ -49,6 +49,7 @@ classDiagram
     class Application {
         -_timer: TimerService
         -_reports: ReportService
+        -_power: WindowsPowerMonitor
         -_views: ViewsByName
         -_timer_view: TimerView
         -_session: Session | None
@@ -103,7 +104,8 @@ classDiagram
         +heartbeat() None
         +get_active_session() Session | None
         +tick() None
-        +freeze() None
+        +freeze(reason: PauseReason) None
+        +pause_for_power() None
         +get_elapsed_seconds() int
         -_persistence_operation() Iterator~None~
         -_require_active_session(status: SessionStatus) Session
@@ -168,6 +170,22 @@ classDiagram
     class SQLiteConnection {
         <<external>>
     }
+    class WindowsPowerMonitor {
+        -_on_interrupt: Callback
+        -_pending: bool
+        -_hwnd: int | None
+        -_registration: int | None
+        -_user32: WinDLL
+        -_comctl32: WinDLL
+        -_callback: NativeSubclassProc
+        +pending: bool
+        +__init__(on_interrupt: Callback)
+        +start(hwnd: int) None
+        +notify(event: int) bool
+        +take_pending() bool
+        +close() None
+        -_window_proc(hwnd: int, message: int, wparam: int, lparam: int, subclass_id: int, ref_data: int) int
+    }
 
     CTk <|-- Application
     CTkFrame <|-- TimerView
@@ -176,6 +194,7 @@ classDiagram
     Application "1" *-- "1" HistoryView : tela history
     Application --> TimerService : _timer injetado
     Application --> ReportService : _reports injetado
+    Application "1" *-- "1" WindowsPowerMonitor : registra e libera
     TimerService --> StudyRepository : _repository compartilhado
     ReportService --> StudyRepository : _repository compartilhado
     TimerService --> ClockService : _clock
@@ -188,6 +207,7 @@ classDiagram
     note for StudyRepository "Cada comando de escrita possui BEGIN IMMEDIATE, validacao e COMMIT ou rollback integral."
     note for ReportService "Consultas agregadas ainda não implementadas."
     note for ClockService "Implementado. Somente tick aceita tempo; pausa preserva o ultimo snapshot e seu motivo."
+    note for WindowsPowerMonitor "WM_POWERBROADCAST na thread da janela. Congela via callback; SQL e UI ficam para a fila Tk."
 ```
 
 Abreviações usadas apenas para deixar as caixas legíveis, sem criar novos tipos
@@ -203,6 +223,8 @@ ou classes no código:
 | `SessionIntervalPair` | `tuple[Session, StudyInterval]` |
 | `Callback` | `Callable[[], None]` |
 | `Command` | `Callable[[], object]` |
+| `WinDLL` | Biblioteca carregada por `ctypes.WinDLL`; None antes de start |
+| `NativeSubclassProc` | Callback ctypes WINFUNCTYPE com retorno e parâmetros de tamanho nativo |
 
 O método `transaction()` é decorado com `@contextmanager`: sua anotação é
 `Iterator[sqlite3.Connection]`, mas o chamador o utiliza com `with`.
@@ -245,6 +267,18 @@ total por `get_elapsed_seconds()`; a tela somente formata esse total. Após falh
 `_failed` sinaliza operação não confirmada, interrompe callbacks de contagem e
 permite nova tentativa explícita. Não existe SQL nos widgets nem dependência
 de CustomTkinter nos serviços. Diálogos usam `tkinter.messagebox` com texto estático.
+
+Application cria WindowsPowerMonitor com um callback que chama
+`TimerService.freeze(SUSPEND)`. Registra no HWND externo do Tk antes de agendar
+callbacks. `pending` é somente leitura; `take_pending()` agrupa/consome eventos.
+Suspensão e retomada congelam imediatamente e os callbacks Tk processam
+`pause_for_power()` antes de qualquer tick ou ação enfileirada. Não há SQL no
+callback nativo nem retomada automática. `freeze()` conserva WRITE_FAILURE como
+padrão para erros gerais e preserva o primeiro motivo de pausa.
+`on_close()` libera registro/subclasse antes de destruir a janela; WM_NCDESTROY
+também faz limpeza. Falhas de registro impedem abertura normal, e falhas de
+gravação/limpeza mantêm o caminho de tentativa segura. Ver
+[windows_power.py](../app/windows_power.py) e o contrato em [arquitetura](architecture.md).
 
 Fontes: [application.py](../app/application.py), [ui/](../app/ui/),
 [services/](../app/services/) e [repository.py](../app/database/repository.py).
@@ -474,6 +508,7 @@ validação e backup são abertas e fechadas nos próprios módulos de infraestr
 | Falha de persistência | Exceção SQLite congela o snapshot e sinaliza persistence_failed. Rollback não confirma pausa ou finalização. Repetição segura exige COMMIT; heartbeat sem trabalho não limpa o erro. |
 | Estado visual | idle sem pendência; running com contagem ativa; paused/recovered com contagem parada. Em falha, o banco pode ainda estar running e a tela mostra operação não confirmada com controles para nova tentativa. |
 | Fechamento | WM_DELETE_WINDOW persiste paused antes de cancelar callbacks e destruir a janela. Falha conserva janela e snapshot, sem confirmar sucesso. |
+| Energia Windows | Suspensão e variantes de retomada congelam o último snapshot, sem amostrar tempo. A fila Tk persiste paused antes de ticks/ações; mensagens duplicadas não criam intervalos. Apenas ação explícita retoma. |
 | Relatórios | Somam segundos antes de formatar minutos, dividem intervalos por fronteiras locais e evitam dupla soma do intervalo aberto. Implementação pendente. |
 | Persistência | WAL, synchronous FULL, FKs e transações explícitas; SQL parametrizado e validação antes do COMMIT. |
 | Dados locais | Banco e logs no perfil LOCALAPPDATA, fora do executável. Backups automáticos validados com retenção de cinco, além das cópias anteriores à restauração com retenção própria. |
@@ -490,9 +525,10 @@ validação e backup são abertas e fechadas nos próprios módulos de infraestr
 - **Contratos ainda pendentes:** relatórios, calendário e integração do Histórico.
 - **Aceite visual pendente:** widgets e diálogos nativos em Windows com Tcl/Tk;
   os testes atuais controlam widgets e agendamento simulados.
-- **Integração Windows pendente:** eventos de suspensão e retomada devem alimentar
-  o fluxo de pausa segura. Ainda não existe uma classe adaptadora para esses eventos;
-  este documento não pressupõe sua implementação.
+- **Integração Windows implementada:** WindowsPowerMonitor trata suspensão e
+  retomada, com congelamento imediato e persistência adiada segura. O detector
+  de lacunas permanece complementar. Mensagens reais em HWND oculto são testadas;
+  suspensão/hibernação física e entrega ao wrapper Tk ainda exigem aceite.
 - **Fora do modelo de execução:** testes, CI, geração de hashes e empacotamento
   contêm ferramentas e funções auxiliares, não classes de domínio do aplicativo.
 - **Fora do escopo:** login, API, nuvem, telemetria, exportação CSV e criptografia

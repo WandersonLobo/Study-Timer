@@ -11,6 +11,7 @@ apenas com docstring não representam testes executados nem requisitos aprovados
 | `test_security.py` | Nome, SQL, privacidade, pacote, lock e infraestrutura offline | Testes de segurança |
 | `test_clock.py` | Parte de CT-03/12/13/16: monotônico, lacunas, correção civil e snapshots | Relógio confiável com fonte simulada |
 | `test_ui_states.py` | Parte de CT-01/03/16/17/26 | Callbacks reais, widgets simulados e SQLite temporário |
+| `test_windows_power.py` | Parte de CT-13/16/18 | Energia simulada, SQLite real e mensagens em HWND nativo oculto |
 | `test_timer.py` | CT-02/03, parte de CT-04/09/12/13/15/18 | Ciclo de sessão sem interface e rollback real |
 | `test_reports.py` | CT-05/06/07/14/25 | Reservado |
 | `test_recovery.py` | Parte de CT-04/08/18/19 | Heartbeat, falhas SQLite e recuperação em novo processo |
@@ -37,9 +38,7 @@ CT-20 exige Windows limpo sem Python; a abertura local do pacote não o substitu
 
 ## Ambiente desta criação
 
-O ambiente disponível inicialmente contém Python 3.14 sem Tkinter e um registro
-do launcher apontando para uma instalação ausente. Isso não valida a linha-alvo
-3.12 nem a interface. Para verificar esta entrega, foi preparado um runtime
+Para verificar inicialmente esta entrega, foi preparado um runtime
 temporário Python 3.12.10 x64, com as dependências fixadas, fora do repositório.
 Esse runtime embutido não inclui Tcl/Tk e não substitui a instalação de
 desenvolvimento descrita no README.
@@ -72,8 +71,8 @@ civil. A cobertura inclui:
   texto potencialmente privado da exceção.
 
 Para executar apenas esse incremento: `python -m pytest tests/test_clock.py`.
-A suspensão simulada valida o detector conservador; CT-13 ainda exige integração
-e teste de suspend/hibernate real no Windows. O incremento 2 cobre a mudança de
+A suspensão simulada valida o detector conservador; o incremento 5 integra os
+eventos Windows. CT-13 ainda exige teste de suspend/hibernate físico. O incremento 2 cobre a mudança de
 status no banco, e o incremento 3 cobre heartbeat e recuperação de processo.
 
 ## Incremento 2 — ciclo básico de sessão
@@ -185,3 +184,60 @@ Validação automatizada do incremento: Python 3.12.10 x64,
 `python -m pytest --basetemp .pytest_cache/ui-final`: 169 aprovados e um smoke test
 de build pulado por ausência de pacote. `python -m ruff check .`,
 `python -m ruff format --check .`, `python -m mypy` e `git diff --check` passaram.
+
+## Incremento 5 — energia Windows
+
+`python -m pytest tests/test_windows_power.py tests/test_ui_states.py tests/test_clock.py`
+cobre suspensão, três variantes de retomada, eventos duplicados/irrelevantes,
+idle/paused/finished, prioridade sobre ação enfileirada, falha de COMMIT e repetição
+com corte preservado. O relógio simulado avança uma hora com e sem avanço monotônico;
+nenhum segundo suspenso entra no total. SQL e UI só são acionados após o callback.
+
+Um teste Windows cria um HWND STATIC oculto e usa SetWindowSubclass,
+RegisterSuspendResumeNotification e SendMessageW reais. Verifica retorno TRUE,
+encaminhamento de mensagens irrelevantes, callback vivo após GC, remoção e ausência
+de chamadas após close. Outros testes verificam HWND inválido, instalação parcial,
+contenção de exceções na fronteira C e repetição da limpeza após erro.
+Nenhum teste manda o computador suspender ou hibernar.
+
+Aceite físico ainda pendente: iniciar e anotar o total, suspender pelo Windows,
+aguardar e retomar; conferir paused, total estável e Retomar explícito. Repetir
+com hibernação se habilitada, com janela minimizada e na tela Histórico. Verificar
+falha de escrita durante o evento e fechamento após acordar. Isso também valida
+o HWND externo real do Tk e a entrega de eventos pelo hardware/Windows.
+
+Validação automatizada em Python 3.12.10 x64:
+`python -m pytest --basetemp .pytest_cache/power-full` aprovou 189 testes,
+com um smoke test pulado por ausência de build. `python -m ruff check .`,
+`python -m ruff format --check .`, `python -m mypy` e `git diff --check` passaram.
+O runtime utilizado nessa validação não incluía Tcl/Tk e pip; não foi possível realizar aceite visual,
+suspend/hibernate físico ou `pip check`. Não houve atualização de dependências.
+
+## Ambiente completo preparado para o aceite físico
+
+Em 30/10/2026 foi instalado Python 3.12.10 x64 completo no perfil do usuário,
+com assinatura Authenticode válida da Python Software Foundation. A `.venv`
+agora usa essa instalação, com pip 25.0.1 e Tcl/Tk 8.6 (Tcl 8.6.15).
+As dependências foram instaladas do PyPI com os hashes de `requirements-dev.txt`.
+`python -m pip check` passou, assim como Ruff, formatação e mypy. A suíte
+`python -m pytest --basetemp .pytest_cache/python312-tk` aprovou 189 testes,
+com um smoke test de build pulado por ausência de pacote.
+
+A janela nativa abriu com o monitor de energia instalado e sem erros de
+inicialização registrados. O perfil exclusivo de aceite é
+`%LOCALAPPDATA%\StudyTimer-Acceptance\StudyTimer\`, sem uso do banco pessoal.
+Os estados de energia devem ser consultados localmente com `powercfg /a`, sem
+publicar o inventário da máquina. Após reabrir, a captura da
+janela Tk real confirmou a tela Cronômetro em Pronto, com 00:00:00 e sem diálogo
+de erro. Isso confirma a abertura visual inicial; não constitui aceite de todo
+o ciclo ou da transição física de energia.
+
+O cenário básico de suspensão S3 foi confirmado pelo usuário em 30/10/2026:
+ao acordar, a sessão estava pausada e o tempo não avançou. A conferência do perfil
+de aceite encontrou `CLOCK_PAUSED reason=suspend`, sessão paused, nenhum intervalo
+aberto e `PRAGMA integrity_check=ok`. Os valores numéricos antes/depois de acordar
+não foram informados; não se afirma uma comparação temporal independente.
+
+Hibernação física, persistência após reabertura e variações minimizada/Histórico
+permanecem **pendentes** até confirmação específica. Siga o
+[roteiro manual](manual_power_test.md) para os próximos cenários.

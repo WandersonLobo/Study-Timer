@@ -13,7 +13,9 @@ A tela Cronômetro permite iniciar, pausar, retomar e finalizar, com atualizaç�
 de 250 ms e heartbeat de 5 s. O nome fica bloqueado até finalizar a sessão.
 Ao reabrir, um diálogo permite retomar, finalizar ou manter a sessão pausada.
 Fechar a janela salva uma pausa; falhas mantêm a janela aberta para nova tentativa.
-Relatórios, calendário e eventos de energia Windows ainda estão pendentes.
+Suspensão/hibernação e retomada do Windows congelam a contagem e mantêm a sessão
+pausada até uma retomada explícita. O detector de lacunas continua complementar.
+Relatórios e calendário ainda estão pendentes.
 O aceite visual em Windows com Tcl/Tk e o build ainda precisam ser realizados.
 
 ## Estrutura

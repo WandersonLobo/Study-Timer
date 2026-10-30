@@ -5,6 +5,9 @@ O app continua local, sem login, sincronização ou exportação CSV. O cronôme
 o tratamento de falhas funcionam pelos serviços e pela tela Cronômetro.
 Erros em callbacks usam mensagens estáticas e logs sem detalhes privados.
 O fechamento mantém a janela aberta quando a pausa não pode ser confirmada.
+Eventos nativos de energia congelam antes da próxima amostra; a gravação usa a
+fila da UI. Retomar o Windows não retoma a sessão. O callback não executa SQL,
+não exibe diálogos e não deixa exceções atravessarem a fronteira nativa.
 
 ## Correções aplicadas
 
@@ -51,6 +54,29 @@ O fechamento mantém a janela aberta quando a pausa não pode ser confirmada.
   As actions usadas no CI também são fixadas por hash de commit.
 
 ## Auditoria das dependências
+
+### Inspeção local de logs e artefatos — 30/10/2026
+
+- Os logs disponíveis dos perfis normal e de aceite apresentaram somente
+  timestamps, códigos e motivos de pausa. Não foram encontrados caminhos de
+  perfil, nome da conta, e-mails, IPs ou tracebacks nos logs do aplicativo e
+  nos arquivos de saída da execução verificados.
+- Os sete logs do instalador em `.cache/python-setup/` contêm caminhos privados,
+  inclusive nos arquivos UTF-16. São diagnósticos locais do instalador, não logs
+  do aplicativo. Não devem ser publicados nem enviados sem redação dos dados.
+- Os 23 logs encontrados dentro do projeto no momento da inspeção estavam
+  ignorados pelo Git. O índice e os nomes de arquivos do histórico local
+  disponível não apresentaram logs, bancos ou pacotes de distribuição privados.
+- Não havia saída em dist/build, diretório padrão de build neutro ou pacote
+  StudyTimer ZIP nas localizações verificadas do projeto e Downloads. Assim,
+  nenhum pacote real pôde ter seu conteúdo certificado nesta inspeção.
+- Os 19 testes de segurança passaram, incluindo rejeição de dados privados no
+  pacote. Isso verifica a proteção implementada, não um executável ainda não gerado.
+
+Não compacte o diretório de trabalho inteiro: `.gitignore` não exclui arquivos
+de um ZIP manual. Distribua somente a saída validada de `packaging/build.ps1`.
+A inspeção local não comprova ausência de envio anterior, cópias em outros locais,
+sincronização, anexos ou artefatos remotos de CI; esses destinos não foram auditados.
 
 `pip-audit 2.10.1` encontrou avisos nas versões iniciais de `pytest` e `setuptools`.
 Foram atualizadas para `pytest==9.0.3` e `setuptools==84.1.0`, incluindo a dependência
