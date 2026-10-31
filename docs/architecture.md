@@ -32,9 +32,10 @@ O ciclo de sessões funciona sem interface: início, pausa, retomada, finalizaç
 heartbeat e recuperação com transações atômicas. A composição recupera a sessão
 antes de criar a janela. A interface já executa o ciclo de sessão e salva pausa ao fechar.
 
-Relatórios ainda levantam `NotImplementedError`. Application agenda ticks e
-heartbeats e apresenta erros e recuperação. `recovered` e `idle` são estados
-visuais, nunca valores persistidos. O aceite visual nativo permanece pendente.
+Relatórios e Histórico estão implementados. Application agenda ticks e
+heartbeats, apresenta erros e recuperação e atualiza o calendário com o snapshot
+ativo. `recovered` e `idle` são estados visuais, nunca valores persistidos.
+O aceite local usa Tk real; os limites estão registrados em acceptance_report.md.
 
 ## Decisões preservadas da especificação
 
@@ -49,7 +50,8 @@ visuais, nunca valores persistidos. O aceite visual nativo permanece pendente.
 7. Ticks de aproximadamente 250 ms e heartbeat de aproximadamente 5 s.
    Lacuna ou divergência civil acima de 5 s deve pausar no último tick válido.
 8. Suspensão Windows deve ser observada por eventos e pelo detector de lacunas.
-   `WM_POWERBROADCAST` já está integrado; suspend/hibernate físico ainda exige aceite.
+   `WM_POWERBROADCAST` já está integrado; S3 básico foi confirmado pelo usuário,
+   enquanto hibernação e outros cenários físicos ainda exigem aceite.
 9. Relatórios usam fronteiras locais meio abertas e somam segundos antes de
    truncar minutos. O mês exibido é independente dos cartões do período atual.
 10. `ClockSnapshot` identifica o intervalo aberto e substitui seu checkpoint uma
@@ -313,8 +315,62 @@ Referências primárias: [eventos de energia](https://learn.microsoft.com/en-us/
 [registro de notificações](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registersuspendresumenotification)
 e [subclasse na thread da janela](https://learn.microsoft.com/en-us/windows/win32/api/commctrl/nf-commctrl-setwindowsubclass).
 Windows não distingue suspensão e hibernação nessas mensagens. Os testes exercitam
-mensagens reais em HWND oculto; suspend/hibernate físico e integração com o wrapper
-Tk ainda exigem aceite no ambiente de destino.
+mensagens reais em HWND oculto. O usuário confirmou S3 básico com a janela Tk;
+hibernação e outras variações físicas continuam pendentes, conforme o
+[registro de aceite](acceptance_report.md).
+
+## Relatórios — incremento 6
+
+ReportService resolve o fuso a cada consulta usando `tzlocal.reload_localzone`
+e `zoneinfo`, com `tzdata` empacotado para funcionamento offline no Windows.
+As versões e hashes estão nos locks; não há consulta de fuso pela rede.
+Uma fonte de fuso injetável permite testar mudanças de configuração sem alterar
+o Windows. O offset atual não é reutilizado em datas históricas.
+
+Hoje usa [meia-noite, próxima meia-noite); semana usa segunda a próxima segunda;
+mês usa dia 1 até dia 1 seguinte. Cada fronteira local é convertida separadamente
+para UTC, incluindo DST, meias-noites inexistentes/ambíguas e dias suprimidos.
+Interseções são calculadas em segundos UTC. A UI só trunca minutos depois da soma:
+35 + 35 segundos são 70 segundos e aparecem como 1 minuto.
+
+`get_report_intervals()` lê candidatos por interseção e identifica o intervalo
+aberto do snapshot. O snapshot substitui last_seen_at, nunca é somado a ele;
+intervalos fechados ignoram snapshots antigos. Snapshots ativos inconsistentes
+ou anteriores ao checkpoint são rejeitados. Consultas não persistem ticks.
+Sem snapshot, o intervalo aberto usa last_seen_at.
+
+`get_month_days()` inclui dias vazios com zero, independentemente dos cartões.
+`get_day_sessions()` agrega todos os intervalos da mesma sessão no dia e ordena
+por duração decrescente, nome e ID. Sessões sem segundos aparecem apenas no dia
+de criação; retomadas de zero segundos não criam duplicatas em outros dias.
+O esquema e user_version permanecem inalterados.
+
+## Histórico — incremento 7
+
+Application mantém mês exibido e dia selecionado independentes da data de
+referência dos cartões. Ao entrar no Histórico e a cada tick visível, consulta
+os três relatórios com o mesmo snapshot ativo. TimerService.get_snapshot() é
+somente leitura e retorna None após a pausa; não depende de heartbeat para
+mostrar tempo em andamento. O Histórico também atualiza a data dos cartões
+quando não existe contagem ativa, sem aceitar tempo novo no relógio.
+
+HistoryView recebe resultados e callbacks, sem SQL ou regras temporais. O
+contêiner rolável é apresentado com `lift()`, que no CustomTkinter eleva também
+o frame externo; `tkraise()` elevaria apenas seu conteúdo interno. O teste Tk
+verifica o empilhamento real das duas telas ao navegar em ambas as direções.
+O calendário tem 42 posições estáveis, segunda a domingo, navegação mensal,
+seleção de dia e botão Hoje. O total mensal soma os segundos do mês exibido;
+os cartões usam a data atual. As faixas de intensidade são fixas: zero,
+positivo abaixo de 15 min, de 15 a 59 min, de 1 a menos de 2 h e a partir de 2 h.
+O dia atual tem contorno azul e o selecionado, dourado. Nomes/meses e estados
+vazios usam português. A navegação suporta anos 1 a 9998.
+
+Detalhes exibem HH:MM:SS e nomes quebrados em linhas. A lista começa com 50
+sessões e Mostrar mais adiciona outras 50; widgets existentes são reutilizados.
+Valores inalterados não reconstroem o calendário nem a lista. Os cartões e
+células formatam minutos depois da soma, pelo módulo ui/formatting.py.
+Falhas conservam os últimos valores identificados como não atualizados e
+interrompem a contagem, sem apresentar uma gravação como confirmada.
 
 ## Banco e evolução
 
@@ -335,10 +391,8 @@ regra for implementada. A conexão não deve escapar para a camada visual.
 
 ## Próximas etapas
 
-1. Validar as dependências em Python 3.12 x64 e fixar o patch de build aprovado.
-2. Validar visualmente o ciclo e os diálogos em Windows com Tcl/Tk.
-3. Validar suspensão/hibernação física e retomada; eventos e fechamento normal já integrados.
-4. Implementar relatórios e fronteiras locais, incluindo DST e mudança de fuso.
-5. Conectar os relatórios e o calendário mensal à tela Histórico.
-6. Incorporar SVGs aprovados e substituir o ícone provisório.
-7. Executar a matriz de aceite, build e teste em Windows sem Python instalado.
+1. Concluir os aceites pendentes registrados em [acceptance_report.md](acceptance_report.md).
+2. Validar hibernação física, variações de DPI e de hardware; S3 básico já confirmado.
+3. Instalar Windows na VM para validar o ZIP sem Python e com rede bloqueada.
+4. Incorporar SVGs aprovados e substituir o ícone provisório quando fornecidos.
+5. Reexecutar os critérios de atualização e a auditoria de dependências antes de publicar.

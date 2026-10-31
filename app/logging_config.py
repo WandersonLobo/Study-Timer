@@ -1,8 +1,23 @@
 """Configura logs locais com rotação, sem registrar nomes de sessões."""
 
 import logging
+import os
+import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+
+def prepare_windowed_streams() -> None:
+    """Fornece destino nulo quando pythonw/PyInstaller não possuem console.
+
+    Bibliotecas podem escrever avisos em stderr mesmo sem console, por exemplo
+    quando o Windows restringe o carregamento de fontes. Não gravar esses textos
+    em logs evita expor caminhos privados de bibliotecas.
+    """
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
 
 def configure_logging(log_file: Path) -> None:

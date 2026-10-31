@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Callable
+from datetime import date
 from tkinter import messagebox
 from typing import Literal
 
@@ -24,6 +25,10 @@ class Application(ctk.CTk):
         self._timer = timer
         self._power = WindowsPowerMonitor(lambda: timer.freeze(PauseReason.SUSPEND))
         self._reports = reports
+        today = reports.get_today()
+        self._calendar_month = (today.year, today.month)
+        self._selected_day = today
+        self._visible_view: Literal["timer", "history"] = "timer"
         self._session: Session | None = None
         self._state = UIState.IDLE
         self._elapsed_s = 0
@@ -51,9 +56,10 @@ class Application(ctk.CTk):
         content.grid_rowconfigure(0, weight=1)
         content.grid_columnconfigure(0, weight=1)
         self._timer_view = TimerView(content, self.on_start, self.on_pause, self.on_finish)
+        self._history_view = HistoryView(content, self.on_month, self.on_day, self.on_today)
         self._views: dict[str, TimerView | HistoryView] = {
             "timer": self._timer_view,
-            "history": HistoryView(content),
+            "history": self._history_view,
         }
         for view in self._views.values():
             view.grid(row=0, column=0, sticky="nsew")
@@ -71,7 +77,53 @@ class Application(ctk.CTk):
 
     def show_view(self, name: Literal["timer", "history"]) -> None:
         """Alterna a tela sem reconstruir os serviços ou os widgets."""
-        self._views[name].tkraise()
+        self._visible_view = name
+        # CTkScrollableFrame encaminha lift ao contêiner externo; tkraise não.
+        self._views[name].lift()
+        if name == "history":
+            self._run(lambda: None)
+
+    def on_month(self, delta: int) -> None:
+        """Navega apenas o calendário; cartões continuam na data atual."""
+
+        def command() -> None:
+            year, month = self._calendar_month
+            ordinal = year * 12 + month - 1 + delta
+            year, month = divmod(ordinal, 12)
+            month += 1
+            if not 1 <= year <= 9998:
+                return
+            self._calendar_month = (year, month)
+            self._selected_day = date(year, month, 1)
+
+        self._run(command)
+
+    def on_day(self, day: date) -> None:
+        """Seleciona detalhes sem alterar os cartões nem a sessão ativa."""
+
+        def command() -> None:
+            self._selected_day = day
+
+        self._run(command)
+
+    def on_today(self) -> None:
+        """Volta ao mês e ao dia atuais no fuso do sistema."""
+
+        def command() -> None:
+            today = self._reports.get_today()
+            self._calendar_month = (today.year, today.month)
+            self._selected_day = today
+
+        self._run(command)
+
+    def _refresh_history(self) -> None:
+        today = self._reports.get_today()
+        snapshot = self._timer.get_snapshot()
+        totals = self._reports.get_totals(today, snapshot)
+        year, month = self._calendar_month
+        days = self._reports.get_month_days(year, month, snapshot)
+        sessions = self._reports.get_day_sessions(self._selected_day, snapshot)
+        self._history_view.render(today, totals, year, month, days, self._selected_day, sessions)
 
     def on_start(self) -> None:
         """Inicia ou retoma conforme o estado persistido."""
@@ -116,6 +168,8 @@ class Application(ctk.CTk):
             else UIState.PAUSED
         )
         self._render()
+        if self._visible_view == "history" and not self._failed:
+            self._refresh_history()
 
     def _render(self) -> None:
         self._timer_view.render(self._state, self._session, self._elapsed_s, self._failed)
@@ -135,6 +189,8 @@ class Application(ctk.CTk):
                     "A sessão foi pausada no último instante confiável.",
                     parent=self,
                 )
+        elif self._visible_view == "history" and not self._failed:
+            self._run(lambda: None)
         if not self._closed:
             self._tick_job = self.after(TICK_INTERVAL_MS, self._poll)
 
@@ -169,6 +225,7 @@ class Application(ctk.CTk):
     def _handle_error(self, error: Exception) -> None:
         self._timer.freeze()
         self._failed = True
+        self._history_view.show_error()
         logging.getLogger("studytimer.ui").error(
             "UI_OPERATION_FAILED type=%s", type(error).__name__
         )

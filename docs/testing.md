@@ -3,7 +3,7 @@
 Os arquivos de teste seguem a estrutura da seção 10 do PDF. Arquivos reservados
 apenas com docstring não representam testes executados nem requisitos aprovados.
 
-| Arquivo | Cobertura prevista | Situação inicial |
+| Arquivo | Cobertura | Situação atual |
 | --- | --- | --- |
 | `test_bootstrap.py` | Caminhos, logs e inicialização (parte CT-11/27) | Base e recuperação antes de criar a janela |
 | `test_repository.py` | PRAGMAs, índices, checks, transações (parte CT-09/15) | Testes da base |
@@ -13,7 +13,9 @@ apenas com docstring não representam testes executados nem requisitos aprovados
 | `test_ui_states.py` | Parte de CT-01/03/16/17/26 | Callbacks reais, widgets simulados e SQLite temporário |
 | `test_windows_power.py` | Parte de CT-13/16/18 | Energia simulada, SQLite real e mensagens em HWND nativo oculto |
 | `test_timer.py` | CT-02/03, parte de CT-04/09/12/13/15/18 | Ciclo de sessão sem interface e rollback real |
-| `test_reports.py` | CT-05/06/07/14/25 | Reservado |
+| `test_reports.py` | CT-05/06/07/14/25 | Fronteiras, fusos, DST, snapshots e 1.000 sessões |
+| `test_history.py` | CT-05/07/14/17/25 | Calendário, cartões independentes, detalhes e atualização ao vivo |
+| `test_native_ui.py` | Aceite local do MVP | Quatro cenários opt-in com Tk real, isolados por processo |
 | `test_recovery.py` | Parte de CT-04/08/18/19 | Heartbeat, falhas SQLite e recuperação em novo processo |
 | `test_build_smoke.py` | Conteúdo e abertura do onedir (parte CT-23) | Condicional ao build |
 
@@ -37,6 +39,10 @@ janela 900×600 e consulta de pelo menos 1.000 sessões em até 2 s no ambiente 
 CT-20 exige Windows limpo sem Python; a abertura local do pacote não o substitui.
 
 ## Ambiente desta criação
+
+Esta seção e os incrementos 1 a 5 preservam o histórico das validações iniciais.
+O ambiente completo preparado posteriormente e os incrementos 6 a 8 atualizam
+esses limites; consulte [os resultados atuais](acceptance_report.md).
 
 Para verificar inicialmente esta entrega, foi preparado um runtime
 temporário Python 3.12.10 x64, com as dependências fixadas, fora do repositório.
@@ -241,3 +247,40 @@ não foram informados; não se afirma uma comparação temporal independente.
 Hibernação física, persistência após reabertura e variações minimizada/Histórico
 permanecem **pendentes** até confirmação específica. Siga o
 [roteiro manual](manual_power_test.md) para os próximos cenários.
+
+## Incrementos 6 a 8 — relatórios, Histórico e aceite local
+
+Resultados e limites atualizados em [acceptance_report.md](acceptance_report.md).
+As consultas usam `tzlocal` e `tzdata` fixados nos locks e o fuso é injetável nos
+testes. `test_reports.py` inclui UTC, fusos históricos, dias de 23/25/23,5 horas,
+fold, data local suprimida, 35+35 s, snapshots e 1.000 sessões. `test_history.py`
+testa callbacks, calendário independente, sessões ao vivo e paginação.
+
+O aceite com Tk real é opt-in e deve ser executado em Windows com Tcl/Tk:
+
+```powershell
+$env:STUDYTIMER_NATIVE_UI = '1'
+.\.venv\Scripts\python.exe -m pytest tests/test_native_ui.py -s
+Remove-Item Env:STUDYTIMER_NATIVE_UI
+```
+
+`tests/native_ui_scenarios.py` executa cada cenário em processo próprio, com
+uma raiz Tk e banco temporário. Cobre ciclo, mínimo 900×600, navegação, falha de
+fechamento, recuperação, rede indisponível na API socket, restauração e primeira
+página de 1.000 sessões. A navegação verifica a ordem real dos contêineres das
+telas; inspecionar somente os valores dos widgets não detectava o Histórico
+encoberto pelo Cronômetro. A correção usa o `lift()` público do contêiner rolável.
+O bloqueio de socket não certifica firewall do EXE nem
+substitui a execução em Windows sem Python, que foi adiada pelo usuário.
+
+Build oficial validado com Python 3.12.10 x64 e Tcl/Tk 8.6: pip check, Ruff,
+formatação e mypy aprovados; 235 testes sem marca build e 1 smoke test aprovados,
+incluindo os quatro cenários Tk opt-in. O smoke exige banco inicializado,
+recursos empacotados, processo vivo e `APPLICATION_READY`, sem STARTUP_FAILED.
+Não basta manter um processo vivo com uma caixa de erro de inicialização aberta.
+
+A janela do EXE foi exercitada localmente em AppContainer sem capabilities de
+rede: ciclo completo, navegação durante contagem, detalhes, troca de mês,
+fechamento e dados preservados na reabertura e substituição da pasta do programa.
+Esse teste não usou o banco pessoal e não alterou configurações de segurança.
+O [roteiro da VM](distribution_acceptance.md) registra o aceite que falta.

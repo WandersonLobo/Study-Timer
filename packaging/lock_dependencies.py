@@ -32,7 +32,9 @@ def generate_locks(wheel_dir: Path, project_root: Path) -> None:
             key = (name.lower().replace("_", "-"), version)
             digest = hashes[key]
             lines.append(f"{line} --hash=sha256:{digest}")
-        source.with_suffix(".txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        source.with_suffix(".txt").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8", newline="\n"
+        )
 
 
 if __name__ == "__main__":

@@ -113,6 +113,38 @@ def test_bundle_check_rejects_private_path_encoded_as_utf16(tmp_path: Path) -> N
         checker(tmp_path)
 
 
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16-le"])
+@pytest.mark.parametrize("boundary", [0, 8, 28, 55])
+def test_bundle_allows_only_the_complete_public_cpython_doc_example(
+    tmp_path: Path, encoding: str, boundary: int
+) -> None:
+    namespace = runpy.run_path(str(PROJECT_ROOT / "packaging/check_bundle.py"))
+    example = namespace["PUBLIC_STDLIB_EXAMPLE"].encode(encoding)
+    content = b"x" * (1_048_576 - boundary) + example
+    path = tmp_path / "library.bin"
+    path.write_bytes(content)
+    namespace["check_bundle"](tmp_path)
+    # Um caminho real ao lado do exemplo ainda deve ser bloqueado.
+    path.write_bytes(content + r"C:\Users\Private\file.py".encode(encoding))
+    with pytest.raises(ValueError, match="caminho privado"):
+        namespace["check_bundle"](tmp_path)
+
+
+def test_public_doc_example_does_not_exempt_a_supplied_private_profile(tmp_path: Path) -> None:
+    namespace = runpy.run_path(str(PROJECT_ROOT / "packaging/check_bundle.py"))
+    (tmp_path / "library.bin").write_bytes(namespace["PUBLIC_STDLIB_EXAMPLE"].encode())
+    with pytest.raises(ValueError, match="caminho privado"):
+        namespace["check_bundle"](tmp_path, ("C:/Users/Barney",))
+
+
+@pytest.mark.parametrize("suffix", ["/file.py", "", "/AppData/Local"])
+def test_example_username_is_not_a_general_path_exception(tmp_path: Path, suffix: str) -> None:
+    (tmp_path / "library.bin").write_bytes(("C:/Users/Barney" + suffix).encode())
+    namespace = runpy.run_path(str(PROJECT_ROOT / "packaging/check_bundle.py"))
+    with pytest.raises(ValueError, match="caminho privado"):
+        namespace["check_bundle"](tmp_path)
+
+
 def test_infrastructure_initializes_with_network_unavailable(tmp_path: Path) -> None:
     with patch.object(socket, "socket", side_effect=AssertionError("Rede indisponível")):
         database = initialize_database(tmp_path / "offline.db")

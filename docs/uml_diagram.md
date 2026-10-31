@@ -22,7 +22,6 @@ Markdown com suporte a Mermaid. A notação segue a
 | `<<dataclass>>` | Modelo imutável com `frozen=True` e `slots=True`. |
 | `<<enumeration>>` | Enumeração derivada de `StrEnum`. |
 | `<<protocol>>` | Interface Python declarada com `typing.Protocol`. |
-| `<<partial>>` / `<<contract>>` | Parte do comportamento ainda levanta `NotImplementedError`. |
 | `<<external>>` | Tipo fornecido pelo Python ou pelo CustomTkinter. |
 | `<<module>>` | Agrupamento de funções de um módulo; não é uma classe Python. |
 
@@ -50,6 +49,10 @@ classDiagram
         -_timer: TimerService
         -_reports: ReportService
         -_power: WindowsPowerMonitor
+        -_history_view: HistoryView
+        -_calendar_month: CalendarMonth
+        -_selected_day: date
+        -_visible_view: ViewName
         -_views: ViewsByName
         -_timer_view: TimerView
         -_session: Session | None
@@ -62,6 +65,10 @@ classDiagram
         -_recovery_job: str | None
         +__init__(timer: TimerService, reports: ReportService)
         +show_view(name: ViewName) None
+        +on_month(delta: int) None
+        +on_day(day: date) None
+        +on_today() None
+        -_refresh_history() None
         +on_start() None
         +on_pause() None
         +on_finish() None
@@ -86,7 +93,30 @@ classDiagram
         +render(state: UIState, session: Session | None, elapsed_s: int, failed: bool) None
     }
     class HistoryView {
-        +__init__(master: CTkFrame)
+        +total_labels: list~CTkLabel~
+        +day_buttons: list~CTkButton~
+        +previous_button: CTkButton
+        +next_button: CTkButton
+        +today_button: CTkButton
+        +month_label: CTkLabel
+        +month_total_label: CTkLabel
+        +day_label: CTkLabel
+        +more_button: CTkButton
+        +status_label: CTkLabel
+        -_on_day: DayCallback
+        -_details: CTkFrame
+        -_empty_label: CTkLabel
+        -_session_rows: list~CTkLabel~
+        -_session_data: SessionSummaries
+        -_session_limit: int
+        -_details_key: object
+        -_calendar_key: object
+        -_totals: PeriodTotals | None
+        +__init__(master: CTkFrame, on_month: MonthCallback, on_day: DayCallback, on_today: Callback)
+        +render(reference: date, totals: PeriodTotals, year: int, month: int, days: SecondsByDay, selected: date, sessions: list~SessionSummary~) None
+        +show_error() None
+        -_render_sessions() None
+        -_show_more() None
     }
 
     class TimerService {
@@ -107,6 +137,7 @@ classDiagram
         +freeze(reason: PauseReason) None
         +pause_for_power() None
         +get_elapsed_seconds() int
+        +get_snapshot() ClockSnapshot | None
         -_persistence_operation() Iterator~None~
         -_require_active_session(status: SessionStatus) Session
         -_require_stopped_clock() None
@@ -114,12 +145,17 @@ classDiagram
         -_require_snapshot(session_id: int) ClockSnapshot
     }
     class ReportService {
-        <<contract>>
         -_repository: StudyRepository
-        +__init__(repository: StudyRepository)
+        -_timezone_source: TimezoneSource
+        +__init__(repository: StudyRepository, timezone_source: TimezoneSource)
+        +get_today() date
         +get_totals(reference: date, now: ClockSnapshot | None) PeriodTotals
         +get_month_days(year: int, month: int, now: ClockSnapshot | None) SecondsByDay
         +get_day_sessions(day: date, now: ClockSnapshot | None) list~SessionSummary~
+        -_segments(start: int, end: int, now: ClockSnapshot | None) ReportSegments
+        -_bounds(first: date, following: date, zone: tzinfo) Bounds
+        -_next_month(first: date) date
+        -_overlap(start: int, end: int, a: int, b: int) int
     }
     class ClockService {
         -_source: ClockSource
@@ -160,6 +196,8 @@ classDiagram
         +finish_session(session_id: int, snapshot: ClockSnapshot | None) Session
         +save_checkpoint(session_id: int, snapshot: ClockSnapshot) None
         +recover_pending() Session | None
+        +get_report_intervals(start: int, end: int, active_interval_id: int | None) SessionIntervals
+        +get_zero_duration_sessions(start: int, end: int) list~Session~
         -_open_interval(session_id: int, started_at: int) StudyInterval
         -_close_interval(session_id: int, snapshot: ClockSnapshot) None
         -_validate_snapshot(session_id: int, snapshot: ClockSnapshot) StudyInterval
@@ -203,9 +241,10 @@ classDiagram
     StudyRepository --> SQLiteConnection : _connection
 
     note for Application "Mantem servicos ao navegar. Agenda after 250 ms e heartbeat 5 s; fechamento so destroi apos pausa confirmada."
+    note for HistoryView "CTkScrollableFrame inclui um container externo. Application usa lift para apresenta-lo acima do Cronometro."
     note for TimerService "Ciclo, heartbeat e recuperacao implementados. Falha SQLite congela, sinaliza e propaga; sucesso exige COMMIT."
     note for StudyRepository "Cada comando de escrita possui BEGIN IMMEDIATE, validacao e COMMIT ou rollback integral."
-    note for ReportService "Consultas agregadas ainda não implementadas."
+    note for ReportService "Agrega segundos entre fronteiras locais historicas. Snapshot substitui checkpoint sem dupla soma."
     note for ClockService "Implementado. Somente tick aceita tempo; pausa preserva o ultimo snapshot e seu motivo."
     note for WindowsPowerMonitor "WM_POWERBROADCAST na thread da janela. Congela via callback; SQL e UI ficam para a fila Tk."
 ```
@@ -223,6 +262,14 @@ ou classes no código:
 | `SessionIntervalPair` | `tuple[Session, StudyInterval]` |
 | `Callback` | `Callable[[], None]` |
 | `Command` | `Callable[[], object]` |
+| `TimezoneSource` | `Callable[[], tzinfo]` |
+| `CalendarMonth` | `tuple[int, int]` |
+| `DayCallback` | `Callable[[date], None]` |
+| `MonthCallback` | `Callable[[int], None]` |
+| `SessionSummaries` | `tuple[SessionSummary, ...]` |
+| `Bounds` | `tuple[int, int]` |
+| `ReportSegments` | `list[tuple[Session, int, int]]` |
+| `SessionIntervals` | `list[tuple[Session, StudyInterval]]` |
 | `WinDLL` | Biblioteca carregada por `ctypes.WinDLL`; None antes de start |
 | `NativeSubclassProc` | Callback ctypes WINFUNCTYPE com retorno e parâmetros de tamanho nativo |
 
@@ -376,8 +423,8 @@ classDiagram
     ClockService ..> ClockSnapshot : cria snapshot validado
     ClockService ..> PauseReason : informa pausa segura
     ReportService ..> ClockSnapshot : recebe tempo validado
-    ReportService ..> PeriodTotals : retorno previsto
-    ReportService ..> SessionSummary : retorno previsto
+    ReportService ..> PeriodTotals : retorna totais atuais
+    ReportService ..> SessionSummary : retorna contribuicao diaria
 
     note for Session "Mapeia sessions. Nao possui uma lista de intervalos como atributo Python."
     note for StudyInterval "Mapeia study_intervals. O vinculo com Session existe no SQLite."
@@ -385,10 +432,9 @@ classDiagram
     note for ClockSnapshot "Substitui o checkpoint do intervalo aberto uma unica vez no relatorio."
 ```
 
-`StudyRepository` nesta vista é a mesma classe da vista anterior. As dependências
-de retorno previstas dos relatórios representam assinaturas já declaradas,
-sem indicar que essas consultas estejam funcionando. Os snapshots do relógio
-já são produzidos por ticks validados.
+`StudyRepository` nesta vista é a mesma classe da vista anterior. As consultas
+dos relatórios estão implementadas e recebem snapshots de ticks validados;
+os resultados são modelos imutáveis, sem objetos de widget ou conexões.
 
 A cardinalidade `0..*` representa o esquema SQLite atual: cada intervalo pertence
 a exatamente uma sessão, enquanto uma sessão pode existir sem intervalos. O
@@ -485,9 +531,11 @@ serviço inexistentes.
 | [connection.py](../app/database/connection.py) | `initialize_database(database_path: Path) -> sqlite3.Connection` | Usa health e backup; aplica PRAGMAs, cria o esquema inicial e devolve a conexão ao ponto de composição. |
 | [health.py](../app/database/health.py) | `validate_connection(connection) -> None`, `validate_database(database_path) -> None`, `preserve_corrupt_database(database_path) -> None` | Usa SQLite; verifica integridade, FKs e versão; pode lançar `DatabaseHealthError` ou `DatabaseVersionError`. Preserva banco e sidecars sem reparar o original. |
 | [backup.py](../app/database/backup.py) | `create_backup(connection, backup_dir, keep=5) -> Path`, `restore_backup(backup_path, database_path) -> None`, `_restore_validated_backup(backup_path, database_path) -> None` | Usa health e a API de backup da conexão. A restauração obtém `SingleInstance` e preserva uma cópia do destino antes de alterá-lo. |
-| [logging_config.py](../app/logging_config.py) | `configure_logging(log_file: Path) -> None` | Cria `logging.handlers.RotatingFileHandler`: 1 MiB, três arquivos anteriores, sem conteúdo de sessão nos erros de inicialização. |
+| [logging_config.py](../app/logging_config.py) | `configure_logging(log_file: Path) -> None`, `prepare_windowed_streams() -> None` | Logs rotativos de 1 MiB com três anteriores; fornece destino nulo para stdout/stderr ausentes em pythonw/EXE. Não grava mensagens brutas das bibliotecas. |
 | [validation.py](../app/validation.py) | `normalize_session_name(name: str) -> str` | Usada por `TimerService.start_session`; remove controles, aplica nome padrão e limite de 120 caracteres. |
 | [startup_dialog.py](../app/ui/startup_dialog.py) | `show_startup_message(message: str) -> None` | Usada por `main()`; chama MessageBoxW do Windows para apresentar texto estático sem caminhos privados. |
+| [formatting.py](../app/ui/formatting.py) | `format_minutes(seconds: int) -> str`, `format_clock(seconds: int) -> str` | Formata os segundos já agregados pelo serviço. Usada por HistoryView para cartões/células e detalhes diários. |
+| [history_view.py](../app/ui/history_view.py) | `intensity_color(seconds: int) -> str` | Seleciona faixas fixas de intensidade dos dias do calendário. |
 
 O repositório mantém apenas a conexão de trabalho. As conexões temporárias de
 validação e backup são abertas e fechadas nos próprios módulos de infraestrutura.
@@ -509,7 +557,7 @@ validação e backup são abertas e fechadas nos próprios módulos de infraestr
 | Estado visual | idle sem pendência; running com contagem ativa; paused/recovered com contagem parada. Em falha, o banco pode ainda estar running e a tela mostra operação não confirmada com controles para nova tentativa. |
 | Fechamento | WM_DELETE_WINDOW persiste paused antes de cancelar callbacks e destruir a janela. Falha conserva janela e snapshot, sem confirmar sucesso. |
 | Energia Windows | Suspensão e variantes de retomada congelam o último snapshot, sem amostrar tempo. A fila Tk persiste paused antes de ticks/ações; mensagens duplicadas não criam intervalos. Apenas ação explícita retoma. |
-| Relatórios | Somam segundos antes de formatar minutos, dividem intervalos por fronteiras locais e evitam dupla soma do intervalo aberto. Implementação pendente. |
+| Relatórios | Somam segundos antes de formatar minutos, usam fronteiras locais históricas e substituem o checkpoint ativo sem dupla soma. Histórico recebe resultados e callbacks; calendário independente dos cartões. |
 | Persistência | WAL, synchronous FULL, FKs e transações explícitas; SQL parametrizado e validação antes do COMMIT. |
 | Dados locais | Banco e logs no perfil LOCALAPPDATA, fora do executável. Backups automáticos validados com retenção de cinco, além das cópias anteriores à restauração com retenção própria. |
 
@@ -522,13 +570,15 @@ validação e backup são abertas e fechadas nos próprios módulos de infraestr
   de falhas com escritas atômicas; backups/restauração,
   lock de instância, logs, comandos da UI, ticks/heartbeats, diálogos de recuperação
   e erro e fechamento com pausa salva; navegação entre as duas telas.
-- **Contratos ainda pendentes:** relatórios, calendário e integração do Histórico.
-- **Aceite visual pendente:** widgets e diálogos nativos em Windows com Tcl/Tk;
-  os testes atuais controlam widgets e agendamento simulados.
+- **Histórico implementado:** cartões atuais, calendário e total do mês exibido,
+  detalhes paginados e atualização com snapshot ativo antes do heartbeat.
+- **Aceite local:** inclui cenários de Tk real isolados por processo; ver
+  [resultados e limites](acceptance_report.md).
 - **Integração Windows implementada:** WindowsPowerMonitor trata suspensão e
   retomada, com congelamento imediato e persistência adiada segura. O detector
   de lacunas permanece complementar. Mensagens reais em HWND oculto são testadas;
-  suspensão/hibernação física e entrega ao wrapper Tk ainda exigem aceite.
+  S3 básico na janela Tk foi confirmado pelo usuário. Hibernação e variações
+  minimizada/Histórico ainda exigem aceite físico.
 - **Fora do modelo de execução:** testes, CI, geração de hashes e empacotamento
   contêm ferramentas e funções auxiliares, não classes de domínio do aplicativo.
 - **Fora do escopo:** login, API, nuvem, telemetria, exportação CSV e criptografia

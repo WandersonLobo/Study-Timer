@@ -6,7 +6,7 @@ from app.config import AppPaths
 from app.database.connection import initialize_database
 from app.database.health import DatabaseHealthError, DatabaseVersionError
 from app.database.repository import StudyRepository
-from app.logging_config import configure_logging
+from app.logging_config import configure_logging, prepare_windowed_streams
 from app.services.clock_service import ClockService, SystemClock
 from app.services.report_service import ReportService
 from app.services.timer_service import TimerService
@@ -17,6 +17,7 @@ from app.ui.startup_dialog import show_startup_message
 def main() -> None:
     """Protege a inicialização e informa falhas sem exibir dados privados."""
     try:
+        prepare_windowed_streams()
         paths = AppPaths.from_environment()
         paths.ensure_directories()
         with SingleInstance(paths.data_dir / "instance.lock"):
@@ -35,8 +36,17 @@ def main() -> None:
         logging.getLogger("studytimer").error("STARTUP_DATABASE_VERSION_UNSUPPORTED")
         show_startup_message("Este banco pertence a outra versão. Use uma versão compatível.")
     except Exception as error:
-        # O texto da exceção pode conter caminhos e dados; registrar somente o tipo.
-        logging.getLogger("studytimer").error("STARTUP_FAILED type=%s", type(error).__name__)
+        # Somente tipo e localização lógica; nunca texto da exceção ou caminhos.
+        frame = error.__traceback__
+        while frame is not None and frame.tb_next is not None:
+            frame = frame.tb_next
+        logging.getLogger("studytimer").error(
+            "STARTUP_FAILED type=%s module=%s function=%s line=%s",
+            type(error).__name__,
+            str(frame.tb_frame.f_globals.get("__name__", "unknown")) if frame else "unknown",
+            frame.tb_frame.f_code.co_name if frame else "unknown",
+            frame.tb_lineno if frame else 0,
+        )
         show_startup_message(
             "Não foi possível abrir o StudyTimer. Verifique as permissões da pasta de dados "
             "e a instalação do programa. Consulte o log local para o código da falha."
@@ -56,6 +66,7 @@ def run_application(paths: AppPaths) -> None:
         timer.recover_pending()
         reports = ReportService(repository)
         application = Application(timer, reports)
+        logging.getLogger("studytimer").info("APPLICATION_READY")
         application.mainloop()
     finally:
         connection.close()

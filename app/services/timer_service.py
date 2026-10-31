@@ -179,6 +179,10 @@ class TimerService:
                 total += end - interval.started_at
             return total
 
+    def get_snapshot(self) -> ClockSnapshot | None:
+        """Compartilha só o snapshot ativo; após pausa os relatórios usam o banco."""
+        return self._clock.get_snapshot() if self._clock.is_running else None
+
     @contextmanager
     def _persistence_operation(self) -> Iterator[None]:
         """Congela em falhas SQLite, sem ocultar exceções nem registrar dados privados."""

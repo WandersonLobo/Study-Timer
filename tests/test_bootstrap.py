@@ -10,7 +10,7 @@ import pytest
 from app.config import AppPaths
 from app.database.connection import initialize_database
 from app.database.repository import StudyRepository
-from app.logging_config import configure_logging
+from app.logging_config import configure_logging, prepare_windowed_streams
 from app.models import ClockSnapshot, SessionStatus
 from app.services.report_service import ReportService
 from app.services.timer_service import TimerService
@@ -36,6 +36,29 @@ def test_missing_local_app_data_has_no_fallback(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
     with pytest.raises(RuntimeError, match="LOCALAPPDATA"):
         AppPaths.from_environment()
+
+
+def test_windowed_startup_provides_streams_without_persisting_library_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, "stdout", None)
+        patch.setattr(sys, "stderr", None)
+        prepare_windowed_streams()
+        stdout, stderr = sys.stdout, sys.stderr
+        assert stdout is not None and stderr is not None
+        stdout.write("Aviso de biblioteca")
+        stderr.write("Aviso de fonte indisponível")
+        prepare_windowed_streams()
+        assert sys.stdout is stdout and sys.stderr is stderr
+    stdout.close()
+    stderr.close()
+
+
+def test_console_startup_preserves_existing_streams() -> None:
+    stdout, stderr = sys.stdout, sys.stderr
+    prepare_windowed_streams()
+    assert sys.stdout is stdout and sys.stderr is stderr
 
 
 def test_application_composition_recovers_before_creating_the_window(

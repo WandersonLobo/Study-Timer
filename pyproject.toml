@@ -10,7 +10,10 @@ dynamic = ["dependencies"]
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-ra --strict-markers"
-markers = ["build: validação do pacote Windows gerado pelo PyInstaller"]
+markers = [
+    "build: validação do pacote Windows gerado pelo PyInstaller",
+    "native_ui: aceite opt-in com Tcl/Tk real no Windows",
+]
 
 [tool.ruff]
 target-version = "py312"

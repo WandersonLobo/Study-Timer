@@ -39,13 +39,14 @@ class Widget:
         pass
 
     pack = grid
+    grid_remove = grid
     grid_rowconfigure = grid
     grid_columnconfigure = grid
     title = grid
     geometry = grid
     minsize = grid
     protocol = grid
-    tkraise = grid
+    lift = grid
     update_idletasks = grid
 
     def winfo_id(self) -> int:

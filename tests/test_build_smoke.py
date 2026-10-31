@@ -28,6 +28,9 @@ def test_windows_bundle_opens(tmp_path: Path) -> None:
             process.wait(timeout=5)
         assert (tmp_path / "StudyTimer" / "estudos.db").is_file()
         assert (tmp_path / "StudyTimer" / "logs" / "studytimer.log").is_file()
+        log = (tmp_path / "StudyTimer" / "logs" / "studytimer.log").read_text(encoding="utf-8")
+        assert "APPLICATION_READY" in log, "A interface não concluiu a inicialização."
+        assert "STARTUP_FAILED" not in log
     finally:
         if process.poll() is None:
             process.terminate()

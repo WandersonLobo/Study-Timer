@@ -4,7 +4,7 @@ Aplicativo desktop de estudos para Windows 10/11 x64, feito com Python 3.12,
 CustomTkinter e SQLite. Dados locais, uso offline e somente duas telas:
 Cronômetro e Histórico. Baseado na especificação técnica v1.1 revisada.
 
-**Estado atual: relógio, ciclo de sessões, checkpoints e recuperação.** Iniciar,
+**Estado atual: cronômetro, recuperação, relatórios e Histórico.** Iniciar,
 pausar, retomar, finalizar e salvar checkpoints funcionam pelos serviços e testes
 com SQLite. Ao abrir, uma sessão interrompida é recuperada como pausada até o
 último checkpoint confirmado, excluindo o tempo com o programa fechado. Falhas
@@ -15,8 +15,11 @@ Ao reabrir, um diálogo permite retomar, finalizar ou manter a sessão pausada.
 Fechar a janela salva uma pausa; falhas mantêm a janela aberta para nova tentativa.
 Suspensão/hibernação e retomada do Windows congelam a contagem e mantêm a sessão
 pausada até uma retomada explícita. O detector de lacunas continua complementar.
-Relatórios e calendário ainda estão pendentes.
-O aceite visual em Windows com Tcl/Tk e o build ainda precisam ser realizados.
+O Histórico inclui cartões atuais, calendário mensal navegável, intensidade e
+sessões por dia, com atualização antes do heartbeat. Relatórios usam fusos
+históricos e somam segundos antes de truncar minutos.
+O aceite local está registrado em [resultados](docs/acceptance_report.md).
+Hibernação física e Windows limpo na VM permanecem pendentes.
 
 ## Estrutura
 
@@ -33,6 +36,7 @@ Study-Timer/
 │   ├── config.py                 # Constantes e LOCALAPPDATA
 │   ├── logging_config.py         # Logs rotativos
 │   ├── single_instance.py        # Lock por perfil Windows
+│   ├── windows_power.py          # Suspensão e retomada sem contagem automática
 │   ├── validation.py             # Normalização do nome de sessão
 │   ├── models/                   # Um arquivo por dataclass ou enumeração
 │   │   ├── __init__.py           # Exportações públicas dos modelos
@@ -48,11 +52,12 @@ Study-Timer/
 │   ├── ui/
 │   │   ├── timer_view.py
 │   │   ├── history_view.py
+│   │   ├── formatting.py          # Formatação após agregação
 │   │   └── startup_dialog.py      # Erros sem caminhos privados
 │   ├── services/
 │   │   ├── clock_service.py       # Fonte de relógio injetável
 │   │   ├── timer_service.py       # Sessões, checkpoints e recuperação
-│   │   └── report_service.py      # Contratos dos relatórios
+│   │   └── report_service.py      # Fronteiras locais, DST e snapshots
 │   └── database/
 │       ├── connection.py          # Conexão e PRAGMAs
 │       ├── backup.py              # API SQLite, retenção e restauração validada
@@ -63,13 +68,15 @@ Study-Timer/
 │   ├── architecture.md
 │   ├── testing.md
 │   ├── security.md
+│   ├── acceptance_report.md       # Resultados e limites do aceite local
+│   ├── distribution_acceptance.md # Roteiro do aceite adiado na VM
 │   └── mockups/                  # Aguardando SVGs aprovados
 ├── packaging/
 │   ├── StudyTimer.spec           # Fonte única do build onedir
 │   ├── check_bundle.py           # Bloqueio de dados privados no pacote
 │   ├── lock_dependencies.py      # Geração dos hashes das wheels
 │   └── build.ps1                 # Qualidade, build, smoke, ZIP e SHA-256
-├── tests/                        # Testes da base e módulos reservados
+├── tests/                        # Testes de serviços, persistência, UI e build
 └── .github/workflows/ci.yml       # Qualidade em Windows/Python 3.12
 ```
 
@@ -83,9 +90,9 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe main.py
 ```
 
-Não é necessário ativar a venv. As versões são uma baseline inicial; o patch
-exato do Python e as dependências precisam ser validados e registrados antes
-do primeiro build de distribuição. Não há suporte declarado a Python 3.13+.
+Não é necessário ativar a venv. O build local foi validado com Python 3.12.10
+x64 e as dependências fixadas nos locks; consulte os resultados de aceite.
+Não há suporte declarado a Python 3.13+.
 
 ```powershell
 .\.venv\Scripts\python.exe -m ruff check .
@@ -118,7 +125,8 @@ Com a venv Python 3.12 x64 criada, execute no Windows:
 O script usa exclusivamente [StudyTimer.spec](packaging/StudyTimer.spec), inclui
 os recursos do CustomTkinter, roda o teste de abertura e compacta a pasta inteira
 `dist/StudyTimer/`. Gera `StudyTimer-Windows-v0.1.0.zip` e o arquivo `.sha256`.
-O ícone atual é provisório. A configuração ainda exige validação de build real.
+O ícone atual é provisório. O build e o smoke locais foram aprovados; o aceite
+em Windows limpo continua pendente.
 O build cria um ambiente novo em `C:\StudyTimerBuild\<id>`, copia apenas fontes e
 recursos e bloqueia arquivos pessoais antes de gerar a saída final. A pasta deve
 ser gravável; `-BuildRoot` permite informar outro diretório neutro fora do perfil.
@@ -135,6 +143,15 @@ Confira a procedência do pacote e compare o SHA-256 com o publicado pelo projet
 ```powershell
 Get-FileHash .\StudyTimer-Windows-v0.1.0.zip -Algorithm SHA256
 ```
+
+SHA-256 do pacote local gerado em 30/10/2026 (atualizar a cada novo build):
+
+```text
+56ecefdf206d02075cde68ab5fb044604606abcf2b2fdd4868b074ba9169a455
+```
+
+O [roteiro da distribuição](docs/distribution_acceptance.md) descreve o aceite
+em VM sem Python, com rede desconectada e substituição da pasta do programa.
 
 Executáveis novos sem assinatura podem apresentar aviso do SmartScreen. Verifique
 a origem e o hash com o responsável pela distribuição; não desative o antivírus.

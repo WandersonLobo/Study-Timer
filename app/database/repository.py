@@ -223,6 +223,47 @@ class StudyRepository:
                 session = self._require_session(session.id, SessionStatus.PAUSED)
         return session
 
+    def get_report_intervals(
+        self, start: int, end: int, active_interval_id: int | None = None
+    ) -> list[tuple[Session, StudyInterval]]:
+        """Lê intervalos candidatos e o intervalo ativo para validar o snapshot.
+
+        As fronteiras são UTC meio abertas. O serviço calcula a interseção e
+        substitui o checkpoint; SQL não soma o snapshot ao tempo persistido.
+        """
+        rows = self._connection.execute(
+            "SELECT s.id AS session_id, s.name, s.created_at, s.finished_at, s.status, "
+            "i.id, i.started_at, i.last_seen_at, i.ended_at FROM study_intervals i "
+            "JOIN sessions s ON s.id = i.session_id "
+            "WHERE (i.started_at < ? AND COALESCE(i.ended_at, i.last_seen_at) > ?) "
+            "OR (i.id = ? AND i.ended_at IS NULL) ORDER BY i.id",
+            (end, start, active_interval_id),
+        ).fetchall()
+        return [
+            (
+                Session(
+                    row["session_id"],
+                    row["name"],
+                    row["created_at"],
+                    row["finished_at"],
+                    SessionStatus(row["status"]),
+                ),
+                self._interval_from_row(row),
+            )
+            for row in rows
+        ]
+
+    def get_zero_duration_sessions(self, start: int, end: int) -> list[Session]:
+        """Lista sessões sem segundos persistidos no dia de criação, uma vez só."""
+        rows = self._connection.execute(
+            "SELECT id, name, created_at, finished_at, status FROM sessions s "
+            "WHERE created_at >= ? AND created_at < ? AND NOT EXISTS "
+            "(SELECT 1 FROM study_intervals i WHERE i.session_id = s.id "
+            "AND COALESCE(i.ended_at, i.last_seen_at) > i.started_at) ORDER BY id",
+            (start, end),
+        ).fetchall()
+        return [self._session_from_row(row) for row in rows]
+
     def _open_interval(self, session_id: int, started_at: int) -> StudyInterval:
         """Insere o intervalo antes de alterar o status, dentro da transação do chamador."""
         self._connection.execute(

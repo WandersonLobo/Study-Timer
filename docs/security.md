@@ -55,7 +55,28 @@ não exibe diálogos e não deixa exceções atravessarem a fronteira nativa.
 
 ## Auditoria das dependências
 
-### Inspeção local de logs e artefatos — 30/10/2026
+### Validação do pacote MVP
+
+Os novos relatórios usam tzlocal e tzdata com pins e hashes. O build revelou
+incompatibilidade entre o altgraph antigo e setuptools sem pkg_resources;
+PyInstaller, hooks e altgraph foram atualizados para 6.22.3, 2026.9 e 0.17.5,
+respectivamente, preservando setuptools 84.1.0. Os 20 pins foram consultados nos
+metadados de vulnerabilidades do PyPI sem avisos informados nessa consulta;
+isso não substitui auditorias futuras nem garante ausência de vulnerabilidades.
+
+O scanner reconhece somente a expressão completa de exemplo público de
+`ntpath.splitroot` incluída no CPython. Não há exceção geral para DLLs, arquivos,
+nomes de usuário ou diretórios. Perfis fornecidos explicitamente continuam
+bloqueados mesmo se coincidirem com esse exemplo. Testes cobrem texto UTF-8,
+UTF-16 e fronteiras de blocos, além de caminhos reais ao lado do exemplo.
+
+Inicialização sem console fornece stdout/stderr nulos quando ausentes, permitindo
+fallback de bibliotecas sem gravar suas mensagens potencialmente privadas.
+Erros de startup registram tipo, módulo, função e linha, sem mensagem da exceção,
+traceback completo ou caminhos. `APPLICATION_READY` só é emitido após construir
+a interface; o smoke test exige esse marcador e rejeita STARTUP_FAILED.
+
+### Inspeção preliminar de logs e artefatos — antes do build MVP, 30/10/2026
 
 - Os logs disponíveis dos perfis normal e de aceite apresentaram somente
   timestamps, códigos e motivos de pausa. Não foram encontrados caminhos de
@@ -118,11 +139,15 @@ preservar todos os arquivos; a função de restauração o rejeita por seguranç
 
 ## Limites que ainda exigem aceite
 
-- Interface completa e executável com firewall bloqueando a rede; o teste atual
-  cobre apenas inicialização da infraestrutura com sockets indisponíveis.
-- Build real com Tcl/Tk, revisão dos metadados e teste em Windows sem Python.
-  O scanner verifica bytes dos arquivos extraídos, sem prometer encontrar todos
-  os formatos de metadados comprimidos ou codificados.
+- Windows limpo sem Python e com rede desconectada: adiado pelo usuário até
+  existir Windows na VM. O build real, o smoke, o ciclo e o Histórico foram
+  aprovados localmente; o EXE também funcionou em AppContainer sem capabilities
+  de rede. Esses resultados não substituem o ambiente limpo.
+- A inspeção do pacote final incluiu arquivos extraídos, módulos PYZ e `.pyc`
+  descomprimidos, sem caminhos privados detectados. Não se promete encontrar
+  todos os formatos possíveis de metadados comprimidos ou codificados.
+- Hibernação física e a matriz completa de DPI/hardware permanecem pendentes;
+  resultados e limites estão em [acceptance_report.md](acceptance_report.md).
 - Assinatura de código é futura. O SHA-256 confirma a cópia quando comparado a
   um hash obtido de fonte confiável; sozinho não identifica o autor.
 - CSV e nuvem permanecem fora do escopo. CSV futuro deve neutralizar fórmulas;
