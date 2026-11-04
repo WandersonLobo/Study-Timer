@@ -1,4 +1,24 @@
+#Agents
+AGENTS.md
+
 # Byte-compiled / optimized / DLL files
+.idea/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite*
+*.corrupt*
+*.bak
+*.pending
+*.csv
+logs/
+backups/
+.env.*
+!.env.example
+*.zip
+*.sha256
+
 __pycache__/
 *.py[codz]
 *$py.class
@@ -31,6 +51,8 @@ MANIFEST
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# O .spec do PyInstaller é código-fonte versionado.
+!packaging/StudyTimer.spec
 
 # Installer logs
 pip-log.txt

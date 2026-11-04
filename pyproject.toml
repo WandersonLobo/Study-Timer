@@ -1,0 +1,38 @@
+[project]
+name = "studytimer"
+version = "0.1.0"
+description = "Cronômetro de estudos desktop, local e offline para Windows."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dynamic = ["dependencies"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers"
+markers = [
+    "build: validação do pacote Windows gerado pelo PyInstaller",
+    "native_ui: aceite opt-in com Tcl/Tk real no Windows",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["build", "dist", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["main.py", "app", "tests", "packaging/check_bundle.py", "packaging/lock_dependencies.py"]
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["customtkinter"]
+ignore_missing_imports = true
+
+# CustomTkinter não fornece stubs; a exceção se limita à herança dos widgets.
+[[tool.mypy.overrides]]
+module = ["app.application", "app.ui.timer_view", "app.ui.history_view"]
+disallow_subclassing_any = false

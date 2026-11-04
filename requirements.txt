@@ -1,0 +1,7 @@
+# Gerado por packaging/lock_dependencies.py; não editar manualmente.
+# Artefatos: CPython 3.12, Windows x64. Instalar com --require-hashes.
+customtkinter==5.2.2 --hash=sha256:14ad3e7cd3cb3b9eb642b9d4e8711ae80d3f79fb82545ad11258eeffb2e6b37c
+darkdetect==0.8.0 --hash=sha256:a7509ccf517eaad92b31c214f593dbcf138ea8a43b2935406bbd565e15527a85
+packaging==24.2 --hash=sha256:09abb1bccd265c01f4a3aa3f7a7db064b36514d2cba19a2f694fe6150451a759
+tzlocal==5.3.1 --hash=sha256:eb1a66c3ef5847adf7a834f1be0800581b683b5608e74f86ecbcef8ab91bb85d
+tzdata==2026.6 --hash=sha256:0a10eec6e13ef16b627fabed9a5f2ba61a62b1c67f327305f4e7e412a70b4aec
