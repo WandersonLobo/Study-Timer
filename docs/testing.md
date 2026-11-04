@@ -398,3 +398,66 @@ Não houve novo build, certificação em Windows limpo, entrada externa por mous
 do sistema ou transição física de energia. Os testes nativos acionam widgets
 e eventos Tk reais, usam relógio simulado e substituem messageboxes. Os blocos
 3 e 4 aguardam o commit e não fazem parte desta entrega.
+
+## Bloco 3 — Histórico unificado por período e tipo
+
+Validação em 04/11/2026 com Python 3.12.10 x64 no Windows. O Histórico usa um
+resultado imutável para métricas, gráfico, ranking e sessões. A navegação agora
+altera o período de todas essas informações; a independência dos três cartões
+originais não é mais o contrato visual. Os métodos antigos de relatório continuam
+disponíveis e seus 21 testes foram preservados.
+
+`test_period_reports.py` acrescenta 42 cenários de conservação dos segundos,
+filtros Todos/Sem tipo/id, metadados de arquivados/renomeados, períodos vazios,
+média parcial/fracionária, contribuição de sessão em fronteiras e pausas,
+zero segundos, snapshots e consultas sem escritas. Inclui dias de 23/25 horas,
+transições de meia hora, hora repetida com offset, Apia, UTC/Fortaleza e datas
+extremas 1/9998 no Windows. O relatório mensal de 1.000 sessões foi medido em
+0,024 s no teste de referência; as consultas são em lote, sem N+1 por barra.
+
+Os oito testes de `test_history.py` cobrem métricas do período selecionado,
+snapshot antes do heartbeat, pausa, média na virada do dia sem saltar referência,
+filtros, drill-down/retorno, Hoje, limites, vazio, paginação, reutilização de
+widgets, aparência, leitura do nome atual do filtro e falha de gravação. As
+fixtures de widgets simulam o Canvas; os resultados gráficos são também
+verificados com Tk real, não apenas por essas fixtures.
+
+A bateria nativa tem oito cenários em cada tema, totalizando 16 testes. O novo
+fluxo exercita barras por mouse e teclado, Dia/Semana/Mês, tipo arquivado, filtro
+Sem tipo, retorno ao contexto, calendário compacto, bloqueio de dia futuro,
+troca de tema sem nova consulta, continuidade do cronômetro e ausência de
+escritas pelos relatórios. Os fluxos anteriores de ciclo, recuperação, tipos,
+falhas, escala simulada e 1.000 sessões continuam ativos. A primeira página
+de 1.000 sessões no Histórico foi medida em 0,412 s e 0,377 s nos dois temas.
+
+Capturas sintéticas de Dia, Semana e Mês em Claro/Escuro, além de Dia no mínimo
+900×600, foram conferidas visualmente. O ranking e os detalhes são roláveis;
+a composição empilha os painéis em largura estreita e usa colunas na larga,
+considerando a escala lógica do CTk. As capturas locais ficam em
+`.pytest_cache/preview-history-light/` e `preview-history-dark/`, fora do pacote.
+O aviso de fallback de fonte do ambiente, descrito no bloco anterior, permanece.
+
+Comandos finais executados:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m ruff format --check .
+.\.venv\Scripts\python.exe -m mypy
+$env:STUDYTIMER_NATIVE_UI = '1'
+.\.venv\Scripts\python.exe -m pytest --basetemp .pytest_cache/block3-acceptance -q --tb=short
+Remove-Item Env:STUDYTIMER_NATIVE_UI
+git diff --check
+```
+
+Resultado: **354 aprovados e um pulado**, somente o smoke sem pacote gerado.
+Pip check, Ruff, formatação e mypy passaram. As primeiras rodadas ajustaram as
+fixtures ao novo contrato de período; a expectativa de que escolher outra data
+no modo Mês abriria um Dia foi corrigida no teste (a seleção mantém o modo,
+como definido no plano). Um bloqueio transitório de escrita do arquivo pelo
+Windows exigiu repetir a formatação. Não há falhas pendentes na validação final.
+
+Somente dados sintéticos e bancos temporários foram utilizados. Não houve nova
+migração, build, certificação em Windows limpo, transição física de energia ou
+automação externa de mouse. A escala simulada não comprova transições reais de
+DPI entre monitores. A configuração de CI e o bloco 4 aguardam commit do usuário.

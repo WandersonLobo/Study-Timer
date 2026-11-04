@@ -283,6 +283,59 @@ class StudyRepository:
         ).fetchall()
         return [self._session_from_row(row) for row in rows]
 
+    def get_period_intervals(
+        self, start: int, end: int, active_interval_id: int | None = None
+    ) -> list[tuple[Session, StudyInterval, StudyType | None]]:
+        """Busca intervalos e a apresentação histórica de tipos em um LEFT JOIN."""
+        rows = self._connection.execute(
+            "SELECT s.id AS session_id, s.name, s.created_at, s.finished_at, s.status, "
+            "s.study_type_id, i.id, i.started_at, i.last_seen_at, i.ended_at, "
+            "t.id AS type_id, t.name AS type_name, t.color_key, t.is_archived "
+            "FROM study_intervals i JOIN sessions s ON s.id = i.session_id "
+            "LEFT JOIN study_types t ON t.id = s.study_type_id "
+            "WHERE (i.started_at < ? AND COALESCE(i.ended_at, i.last_seen_at) > ?) "
+            "OR (i.id = ? AND i.ended_at IS NULL) ORDER BY i.id",
+            (end, start, active_interval_id),
+        ).fetchall()
+        return [
+            (
+                Session(
+                    row["session_id"],
+                    row["name"],
+                    row["created_at"],
+                    row["finished_at"],
+                    SessionStatus(row["status"]),
+                    row["study_type_id"],
+                ),
+                self._interval_from_row(row),
+                self._report_type_from_row(row),
+            )
+            for row in rows
+        ]
+
+    def get_zero_duration_report_sessions(
+        self, start: int, end: int
+    ) -> list[tuple[Session, StudyType | None]]:
+        """Inclui metadados de sessões zeradas, sem uma consulta por sessão."""
+        rows = self._connection.execute(
+            "SELECT s.id, s.name, s.created_at, s.finished_at, s.status, s.study_type_id, "
+            "t.id AS type_id, t.name AS type_name, t.color_key, t.is_archived "
+            "FROM sessions s LEFT JOIN study_types t ON t.id = s.study_type_id "
+            "WHERE s.created_at >= ? AND s.created_at < ? AND NOT EXISTS "
+            "(SELECT 1 FROM study_intervals i WHERE i.session_id = s.id "
+            "AND COALESCE(i.ended_at, i.last_seen_at) > i.started_at) ORDER BY s.id",
+            (start, end),
+        ).fetchall()
+        return [(self._session_from_row(row), self._report_type_from_row(row)) for row in rows]
+
+    @staticmethod
+    def _report_type_from_row(row: sqlite3.Row) -> StudyType | None:
+        if row["type_id"] is None:
+            return None
+        return StudyType(
+            row["type_id"], row["type_name"], StudyColor(row["color_key"]), bool(row["is_archived"])
+        )
+
     def get_study_type(self, type_id: int) -> StudyType | None:
         """Consulta um tipo, inclusive arquivado, pelo identificador estável."""
         row = self._connection.execute(

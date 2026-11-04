@@ -27,6 +27,7 @@ pytestmark = [
         "types_themes",
         "dialog_errors",
         "scaling",
+        "period_history",
     ],
 )
 def test_native_scenario(scenario: str, mode: str, tmp_path: Path) -> None:

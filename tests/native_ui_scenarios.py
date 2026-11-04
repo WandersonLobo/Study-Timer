@@ -101,13 +101,13 @@ def test_native_full_cycle_and_minimum_window(
     step(app, source, 2)
     app.show_view("history")
     app.update_idletasks()
-    assert_visible(app, app._history_view.month_label)
+    assert_visible(app, app._history_view.period_label)
     assert app._history_view._session_data[0].duration_s == 2
-    for button in app._history_view.day_buttons:
-        assert button.winfo_rootx() >= app.winfo_rootx()
-        assert button.winfo_rootx() + button.winfo_width() <= app.winfo_rootx() + app.winfo_width()
+    canvas = app._history_view.chart.canvas
+    assert canvas.winfo_rootx() >= app.winfo_rootx()
+    assert canvas.winfo_rootx() + canvas.winfo_width() <= app.winfo_rootx() + app.winfo_width()
     app._history_view.previous_button.invoke()
-    assert app._calendar_month == (2024, 4)
+    assert app._history_selection.reference == date(2024, 5, 9)
     step(app, source, 1)
     app._history_view.today_button.invoke()
     assert app._history_view._session_data[0].duration_s == 3
@@ -423,6 +423,120 @@ def test_native_reopened_types(
     app.on_close()
 
 
+def test_native_period_history(
+    native_app: tuple[Application, TimerService, StudyRepository, FakeClock, sqlite3.Connection],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import customtkinter as ctk
+
+    from app.models import ClockSnapshot, HistorySelection, ReportPeriod, StudyColor
+
+    app, timer, repository, source, connection = native_app
+    types = [
+        app._types.create_type(name, color)
+        for name, color in (
+            ("POO", StudyColor.BLUE),
+            ("Banco de Dados", StudyColor.TEAL),
+            ("Redes", StudyColor.ORANGE),
+        )
+    ]
+    for name, hour, seconds, type_id, day in (
+        ("Objetos", 8, 90, types[0].id, 10),
+        ("Consultas SQL", 9, 120, types[1].id, 10),
+        ("Rede antiga", 14, 40, types[2].id, 10),
+        ("Estudo livre", 18, 30, None, 10),
+        ("Início do mês", 8, 200, None, 1),
+    ):
+        start = stamp(2024, 5, day, hour)
+        session, interval = repository.start_session(name, start, type_id)
+        repository.finish_session(
+            session.id, ClockSnapshot(interval.id, start, seconds, start + seconds)
+        )
+    app._types.archive_type(types[2].id)
+    changes = connection.total_changes
+    reads = source.read_count
+    app.deiconify()
+    app.geometry("1180x740")
+    app.show_view("history")
+    app.update()
+    view = app._history_view
+    assert view.report is not None and view.report.total_s == 280
+    assert len(view.chart._regions) == 24 and len(view.chart.canvas.find_withtag("bar")) == 4
+    view.period_buttons[ReportPeriod.WEEK].invoke()
+    app.update()
+    assert view.report.total_s == 280 and view.report.average_days == 5
+    assert len(view.chart._regions) == 7
+    assert any(item.type_id == types[2].id for item in view.report.ranking)
+    # Dia futuro vazio não pode contornar a navegação desabilitada.
+    selection = app._history_selection
+    view.chart.select_bucket(6)
+    assert app._history_selection == selection
+    view._ranking_rows[0][0].invoke()
+    assert view.report.total_s == 120 and view.report.filter_name == "Banco de Dados"
+    parent = app._history_selection
+    canvas = view.chart.canvas
+    x0, x1 = view.chart._regions[4]
+    canvas.event_generate("<Button-1>", x=int((x0 + x1) / 2), y=int(view.chart._plot_bottom - 2))
+    app.update()
+    assert app._history_selection == HistorySelection(
+        ReportPeriod.DAY, date(2024, 5, 10), "type", types[1].id
+    )
+    assert view._session_data[0].name == "Consultas SQL"
+    view.back_button.invoke()
+    assert app._history_selection == parent
+    view.clear_filter_button.invoke()
+    app.on_type_filter(None)
+    assert view.report.total_s == 30 and view.report.filter_name == "Sem tipo"
+    view.today_button.invoke()
+    assert app._history_selection == HistorySelection(ReportPeriod.WEEK, date(2024, 5, 10))
+    assert view.report.total_s == 280
+    view.period_buttons[ReportPeriod.MONTH].invoke()
+    assert view.report.total_s == 480 and len(view.chart._regions) == 31
+    view.chart.select_bucket(0)
+    assert app._history_selection.reference == date(2024, 5, 1)
+    assert view.report.total_s == 200
+    view.back_button.invoke()
+    assert app._history_selection == HistorySelection(ReportPeriod.MONTH, date(2024, 5, 10))
+    view.period_label.invoke()
+    picker = app._date_picker
+    assert picker is not None
+    app.update()
+    assert len(picker.day_buttons) == 42
+    picker.select_day(date(2024, 5, 9))
+    assert app.grab_current() is None and not picker.winfo_exists()
+    view.period_buttons[ReportPeriod.DAY].invoke()
+    assert view.report.total_s == 0
+    view.today_button.invoke()
+    canvas = view.chart.canvas
+    canvas.focus_force()
+    canvas.event_generate("<Right>")
+    canvas.event_generate("<Return>")
+    app.update()
+    assert view.chart.selected_index is not None
+    before = view.report
+    index = view.chart.selected_index
+    background = canvas.cget("background")
+    app.on_appearance("Claro" if app._appearance == AppearanceMode.DARK else "Escuro")
+    app.update()
+    assert view.report is before and view.chart.selected_index == index
+    assert canvas.cget("background") != background
+    assert ctk.get_appearance_mode().lower() == app._appearance.value
+    # Somente a preferência mudou; relatórios e navegação não escrevem estudo.
+    assert connection.total_changes == changes + 1 and source.read_count == reads
+    app.geometry("900x600")
+    app.update()
+    assert not view._wide
+    app.show_view("timer")
+    app.on_start()
+    step(app, source, 2)
+    app.show_view("history")
+    assert view.report.total_s == 282
+    assert timer.is_running
+    app.on_pause()
+    app.on_close()
+
+
 if __name__ == "__main__":
     scenarios = {
         "cycle": test_native_full_cycle_and_minimum_window,
@@ -433,6 +547,7 @@ if __name__ == "__main__":
         "reopened_types": test_native_reopened_types,
         "dialog_errors": test_native_dialog_failures,
         "scaling": test_native_scaled_layout,
+        "period_history": test_native_period_history,
     }
     with pytest.MonkeyPatch.context() as patch:
         mode = AppearanceMode(sys.argv[3]) if len(sys.argv) > 3 else AppearanceMode.DARK

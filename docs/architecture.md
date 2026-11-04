@@ -33,16 +33,17 @@ heartbeat e recuperação com transações atômicas. A composição recupera a 
 antes de criar a janela. A interface já executa o ciclo de sessão e salva pausa ao fechar.
 
 Relatórios e Histórico estão implementados. Application agenda ticks e
-heartbeats, apresenta erros e recuperação e atualiza o calendário com o snapshot
-ativo. `recovered` e `idle` são estados visuais, nunca valores persistidos.
+heartbeats, apresenta erros e recuperação e atualiza o período selecionado com o
+snapshot ativo. `recovered` e `idle` são estados visuais, nunca valores persistidos.
 O aceite local usa Tk real; os limites estão registrados em acceptance_report.md.
 
 O bloco 1 do plano de tipos/Histórico/temas implementa somente a base de dados
 e os serviços: esquema v2, migração v1 → v2, catálogo de tipos e preferência de
 aparência. `Session.study_type_id` é opcional, com padrão None. O bloco 2 injeta
 os serviços de tipos/preferências na janela, expõe o catálogo no Cronômetro e
-aplica Claro/Escuro com preferência salva. Histórico por período e ampliação da
-CI continuam reservados aos blocos 3 e 4, aguardando o commit desta etapa.
+aplica Claro/Escuro com preferência salva. O bloco 3 implementa o Histórico por
+Dia, Semana e Mês com tipos, gráficos e detalhamento. A ampliação da CI continua
+reservada ao bloco 4, aguardando o commit desta etapa.
 
 ## Decisões preservadas da especificação
 
@@ -60,7 +61,8 @@ CI continuam reservados aos blocos 3 e 4, aguardando o commit desta etapa.
    `WM_POWERBROADCAST` já está integrado; S3 básico foi confirmado pelo usuário,
    enquanto hibernação e outros cenários físicos ainda exigem aceite.
 9. Relatórios usam fronteiras locais meio abertas e somam segundos antes de
-   truncar minutos. O mês exibido é independente dos cartões do período atual.
+   truncar minutos. No Histórico do bloco 3, métricas, gráfico, ranking e sessões
+   usam o mesmo período e filtro; a antiga independência dos cartões foi substituída.
 10. `ClockSnapshot` identifica o intervalo aberto e substitui seu checkpoint uma
     única vez. Sem snapshot ativo, relatórios usarão `last_seen_at`.
 11. Build Windows onedir definido exclusivamente no `.spec`, executado pelo script.
@@ -356,7 +358,11 @@ Os relatórios deste incremento não alteraram o esquema. No bloco 1 posterior,
 suas consultas materializam também o vínculo opcional do tipo, sem modificar os
 cálculos, os resumos diários ou a interface do Histórico.
 
-## Histórico — incremento 7
+## Histórico original — incremento 7
+
+Esta seção registra o contrato da entrega original, substituído na interface
+pelo Histórico do bloco 3 descrito adiante. As consultas antigas do serviço
+continuam disponíveis para consumidores e regressões existentes.
 
 Application mantém mês exibido e dia selecionado independentes da data de
 referência dos cartões. Ao entrar no Histórico e a cada tick visível, consulta
@@ -480,12 +486,86 @@ sessão continuam usando o congelamento conservador e a tentativa segura atuais.
 dos tipos. Seus adaptadores de teclado usam o Canvas dos widgets de CustomTkinter
 5.2.2, isolando essa dependência: Tab/foco, Enter/Espaço para botões e setas para
 seletores. Estados desabilitados não iniciam ações. O corpo do Cronômetro é
-rolável e mantém o mínimo 900×600. O Histórico conserva calendário, paginação e
-contratos de relatório; somente paleta e textos permanentes foram ajustados.
+rolável e mantém o mínimo 900×600. Nesse incremento, o Histórico conservou
+calendário, paginação e contratos de relatório; o bloco 3 substitui sua composição.
 
 Foram removidas as instruções sobre pausa, fechamento, intensidade e atualização
 ao vivo. Permanecem rótulos dos dados, estados de operação e mensagens reais de
 falha, recuperação e energia. Ícone, esquema v2 e regras temporais não mudaram.
+
+## Histórico por período e tipo — bloco 3
+
+`HistorySelection` é uma dataclass imutável com `period: ReportPeriod`, data de
+referência, `type_filter` e identificador opcional de tipo. O filtro usa os
+valores all, untyped e type, distinguindo Todos de Sem tipo sem sobrecarregar
+None. Em type, o id identifica um cadastro real; nomes e cores não são chaves.
+A seleção é estado visual em memória, não uma nova tabela ou preferência salva.
+
+`ReportService.get_period_dates()` determina o início e término local exclusivo:
+dia até o dia seguinte, segunda-feira até a próxima segunda, primeiro dia do
+mês até o primeiro dia seguinte. `get_period_report(selection, now=None)`
+entrega um `PeriodReport` imutável para toda a tela, com fronteiras UTC, total,
+média e denominador, buckets, ranking e contribuições de sessões. Nenhuma
+consulta grava ticks, checkpoints ou metadados no banco.
+
+Os intervalos e seus tipos são obtidos em lote com LEFT JOIN, incluindo os
+registros sem tipo e os cadastros arquivados. Não há uma consulta por barra ou
+linha. A contribuição é recortada pelas fronteiras do período; pausas não são
+intervalos de estudo. O snapshot confiável substitui o checkpoint aberto uma
+única vez, preservando a atualização antes do heartbeat. Snapshots antigos não
+estendem intervalos fechados. Zero segundos só produz detalhe no dia de criação,
+sem acrescentar uma barra ou um tipo com tempo fictício.
+
+`ReportBucket` representa limites UTC e composição por tipo. No Dia, as faixas
+horárias respeitam transições históricas de fuso, inclusive horas repetidas,
+suprimidas e mudanças de meia hora. Os limites UTC são ordenados e o detalhe
+distingue a ocorrência/offset de uma hora repetida. Semana tem sete buckets
+diários; mês tem um por dia civil. Soma de buckets, soma do ranking e total
+coincidem em segundos, independentemente da formatação.
+
+`StudyTypeTotal` transporta id, nome, cor, segundos e participação. O ranking
+ordena por duração decrescente, nome normalizado e id. Sem tipo é uma categoria
+cinza; arquivar não apaga sua contribuição. Percentuais usam os segundos do
+filtro, com arredondamento individual de apresentação, sem alterar durações.
+Nos gráficos com muitos tipos, os cinco principais e Outros podem resumir a
+composição; o ranking continua permitindo selecionar todos os tipos reais.
+Outros é somente visual e não é persistido.
+
+No Dia, a métrica principal é o total. Na Semana/Mês, a média divide o total
+pelo número de dias civis: sete ou todos os dias do mês em períodos completos;
+no período atual, os dias transcorridos até hoje, inclusive. Dias sem estudo
+entram no denominador; dias futuros não. Filtrar um tipo não altera essa regra.
+O denominador faz parte do resultado e pode ser consultado em dica contextual,
+sem instrução permanente. A UI formata os segundos após a soma, com 0min, <1min,
+45min ou 2h 30min; os detalhes conservam HH:MM:SS.
+
+`Application` coordena modo, referência, filtro e contexto de retorno. As setas
+navegam por uma unidade do modo e preservam o filtro; não permitem períodos
+inteiramente futuros. Trocar modo mantém a referência selecionada. Hoje mantém
+o modo, volta ao período atual e limpa o filtro/detalhamento. Clicar numa barra
+semanal/mensal abre o Dia correspondente, conservando o filtro; Voltar à semana
+ou Voltar ao mês restaura o contexto. `DatePicker` oferece seleção compacta da
+data sem criar uma terceira tela principal. Os limites de ano seguem 1 a 9998.
+
+`HistoryView` recebe o resultado pronto. `StudyChart` usa Canvas/Tk para converter
+segundos em coordenadas, desenhar barras empilhadas e tratar seleção por mouse
+ou teclado. Não calcula durações. O eixo se adapta ao maior valor e a composição
+do vazio não inventa uma barra mínima. Cores e foco são resolvidos pelo tema;
+o detalhe identifica os tipos também por nome. Trocar Claro/Escuro redesenha
+os elementos do gráfico sem outra consulta de tempo ou outra janela.
+
+Sessões mostram descrição, tipo, data e somente os segundos do período selecionado.
+A data do resumo é a primeira data local de contribuição da sessão naquele
+período; intervalos da mesma sessão são reunidos sem incluir as pausas.
+A lista mantém lotes de 50 com Mostrar mais. Valores inalterados não recriam
+gráfico/listas; ticks mantêm filtro, foco, rolagem e paginação. Renomeação e cor
+atualizadas aparecem na próxima consulta. Na virada do dia, a referência de um
+período histórico escolhido não salta automaticamente para hoje.
+
+O estado vazio usa Sem estudos neste período. Falhas preservam o último
+resultado legível identificado como não atualizado e mantêm o tratamento
+conservador da sessão. Não se adicionaram loops concorrentes, threads de Tk,
+cache persistente de totais, biblioteca gráfica, esquema ou dependências.
 
 Triggers verificam mudanças de status. A transação do repositório verifica também
 o estado final: running exige um intervalo aberto; paused/finished exigem zero.

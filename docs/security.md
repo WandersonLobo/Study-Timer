@@ -3,6 +3,7 @@
 Revisão inicial em 29/10/2026; persistência e recuperação atualizadas em 30/10/2026.
 Migração de esquema e serviços do bloco 1 atualizados em 03/11/2026.
 Interface de tipos e aparência do bloco 2 atualizada em 04/11/2026.
+Histórico por período e filtros do bloco 3 atualizado em 04/11/2026.
 O app continua local, sem login, sincronização ou exportação CSV. O cronômetro e
 o tratamento de falhas funcionam pelos serviços e pela tela Cronômetro.
 Erros em callbacks usam mensagens estáticas e logs sem detalhes privados.
@@ -12,6 +13,19 @@ fila da UI. Retomar o Windows não retoma a sessão. O callback não executa SQL
 não exibe diálogos e não deixa exceções atravessarem a fronteira nativa.
 
 ## Correções aplicadas
+
+- Bloco 3: filtros e seleção de data são estado visual em memória. Consultas
+  parametrizadas recortam os intervalos e incluem o catálogo por LEFT JOIN,
+  sem modificar registros, calcular tempo na UI ou gravar totais derivados.
+  Tipos arquivados e Sem tipo permanecem nos resultados históricos. O gráfico
+  Canvas é local, usa os segundos entregues pelo serviço e não carrega conteúdo
+  remoto. Dicas e detalhes exibem dados na própria janela, sem acrescentá-los
+  aos logs. Falhas conservam a identificação de resultado não atualizado.
+- Períodos, buckets e percentuais usam somente o snapshot confiável e os
+  intervalos persistidos. Consultar ou filtrar não aceita tempo novo, reabre
+  sessão ou altera o motivo de pausa. O esquema continua v2, com backups,
+  integridade e migração existentes preservados. Não houve alteração de
+  dependências, ícone, build ou CI neste bloco.
 
 - Bloco 2: diálogos de tipos chamam os serviços existentes, sem SQL na UI nem
   alteração de durações. Tipo/descrição são bloqueados em uma sessão pendente.

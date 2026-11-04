@@ -2,19 +2,29 @@
 
 import logging
 from collections.abc import Callable
-from datetime import date
+from dataclasses import replace
+from datetime import date, timedelta
 from tkinter import messagebox
 from typing import Literal
 
 import customtkinter as ctk
 
 from app.config import HEARTBEAT_INTERVAL_S, MIN_WINDOW_SIZE, TICK_INTERVAL_MS, WINDOW_SIZE
-from app.models import AppearanceMode, PauseReason, Session, SessionStatus, UIState
+from app.models import (
+    AppearanceMode,
+    HistorySelection,
+    PauseReason,
+    ReportPeriod,
+    Session,
+    SessionStatus,
+    UIState,
+)
 from app.services.preferences_service import PreferencesService
 from app.services.report_service import ReportService
 from app.services.study_type_service import StudyTypeService
 from app.services.timer_service import TimerService
 from app.ui import theme
+from app.ui.date_picker import DatePicker
 from app.ui.history_view import HistoryView
 from app.ui.study_type_dialog import StudyTypeDialog
 from app.ui.timer_view import TimerView
@@ -41,8 +51,9 @@ class Application(ctk.CTk):
         self._power = WindowsPowerMonitor(lambda: timer.freeze(PauseReason.SUSPEND))
         self._reports = reports
         today = reports.get_today()
-        self._calendar_month = (today.year, today.month)
-        self._selected_day = today
+        self._history_selection = HistorySelection(ReportPeriod.DAY, today)
+        self._history_parent: HistorySelection | None = None
+        self._date_picker: DatePicker | None = None
         self._visible_view: Literal["timer", "history"] = "timer"
         self._session: Session | None = None
         self._state = UIState.IDLE
@@ -100,7 +111,17 @@ class Application(ctk.CTk):
             self.on_manage_types,
         )
         self._reload_types()
-        self._history_view = HistoryView(content, self.on_month, self.on_day, self.on_today)
+        self._history_view = HistoryView(
+            content,
+            self.on_period_step,
+            self.on_period_mode,
+            self.on_pick_date,
+            self.on_today,
+            self.on_type_filter,
+            self.on_clear_filter,
+            self.on_bucket,
+            self.on_history_back,
+        )
         self._views: dict[str, TimerView | HistoryView] = {
             "timer": self._timer_view,
             "history": self._history_view,
@@ -132,47 +153,121 @@ class Application(ctk.CTk):
         if name == "history":
             self._run(lambda: None)
 
-    def on_month(self, delta: int) -> None:
-        """Navega apenas o calendário; cartões continuam na data atual."""
+    def on_period_step(self, delta: int) -> None:
+        """Navega uma unidade do modo, sem alterar o filtro."""
 
         def command() -> None:
-            year, month = self._calendar_month
-            ordinal = year * 12 + month - 1 + delta
-            year, month = divmod(ordinal, 12)
-            month += 1
-            if not 1 <= year <= 9998:
+            selection = self._history_selection
+            try:
+                if selection.period == ReportPeriod.MONTH:
+                    ordinal = selection.reference.year * 12 + selection.reference.month - 1 + delta
+                    year, month = divmod(ordinal, 12)
+                    candidate = date(year, month + 1, 1)
+                else:
+                    candidate = selection.reference + timedelta(
+                        days=delta * (7 if selection.period == ReportPeriod.WEEK else 1)
+                    )
+                if not 1 <= candidate.year <= 9998:
+                    return
+                updated = replace(selection, reference=candidate)
+                first, _ = self._reports.get_period_dates(updated)
+                if first > self._reports.get_today():
+                    return
+            except (OverflowError, ValueError):
                 return
-            self._calendar_month = (year, month)
-            self._selected_day = date(year, month, 1)
+            self._history_selection = updated
+            self._history_parent = None
+
+        self._run(command)
+
+    def on_period_mode(self, period: ReportPeriod) -> None:
+        def command() -> None:
+            self._history_selection = replace(self._history_selection, period=period)
+            self._history_parent = None
 
         self._run(command)
 
     def on_day(self, day: date) -> None:
-        """Seleciona detalhes sem alterar os cartões nem a sessão ativa."""
-
         def command() -> None:
-            self._selected_day = day
+            if day <= self._reports.get_today() and day.year <= 9998:
+                self._history_selection = replace(self._history_selection, reference=day)
+                self._history_parent = None
 
         self._run(command)
 
     def on_today(self) -> None:
-        """Volta ao mês e ao dia atuais no fuso do sistema."""
-
         def command() -> None:
-            today = self._reports.get_today()
-            self._calendar_month = (today.year, today.month)
-            self._selected_day = today
+            self._history_selection = HistorySelection(
+                self._history_selection.period, self._reports.get_today()
+            )
+            self._history_parent = None
 
         self._run(command)
 
+    def on_type_filter(self, type_id: int | None) -> None:
+        def command() -> None:
+            self._history_selection = replace(
+                self._history_selection,
+                type_filter="untyped" if type_id is None else "type",
+                study_type_id=type_id,
+            )
+
+        self._run(command)
+
+    def on_clear_filter(self) -> None:
+        self._run(lambda: self._clear_history_filter())
+
+    def _clear_history_filter(self) -> None:
+        self._history_selection = replace(
+            self._history_selection, type_filter="all", study_type_id=None
+        )
+
+    def on_bucket(self, index: int) -> None:
+        report = self._history_view.report
+        if report is None or report.selection.period == ReportPeriod.DAY:
+            return
+        if not 0 <= index < len(report.buckets):
+            return
+        if report.buckets[index].day > self._reports.get_today():
+            return
+
+        def command() -> None:
+            self._history_parent = self._history_selection
+            self._history_selection = replace(
+                self._history_selection,
+                period=ReportPeriod.DAY,
+                reference=report.buckets[index].day,
+            )
+
+        self._run(command)
+
+    def on_history_back(self) -> None:
+        def command() -> None:
+            if self._history_parent is not None:
+                self._history_selection = self._history_parent
+                self._history_parent = None
+
+        self._run(command)
+
+    def on_pick_date(self) -> None:
+        if self._closed:
+            return
+        if self._date_picker is not None and self._date_picker.winfo_exists():
+            self._date_picker.lift()
+            return
+        self._date_picker = DatePicker(
+            self, self._history_selection.reference, self.on_day, self._reports.get_today()
+        )
+
     def _refresh_history(self) -> None:
-        today = self._reports.get_today()
-        snapshot = self._timer.get_snapshot()
-        totals = self._reports.get_totals(today, snapshot)
-        year, month = self._calendar_month
-        days = self._reports.get_month_days(year, month, snapshot)
-        sessions = self._reports.get_day_sessions(self._selected_day, snapshot)
-        self._history_view.render(today, totals, year, month, days, self._selected_day, sessions)
+        report = self._reports.get_period_report(
+            self._history_selection, self._timer.get_snapshot()
+        )
+        self._history_view.render(
+            report,
+            self._reports.get_today(),
+            self._history_parent.period if self._history_parent else None,
+        )
 
     def on_start(self) -> None:
         """Inicia ou retoma conforme o estado persistido."""
@@ -185,7 +280,10 @@ class Application(ctk.CTk):
             else:
                 self._timer.resume_session()
 
-        self._run(command)
+        self._run(
+            command,
+            validation_message="Verifique a descrição (até 120 caracteres) e o tipo selecionado.",
+        )
 
     def _reload_types(self) -> None:
         items = self._types.list_types(include_archived=True)
@@ -253,6 +351,7 @@ class Application(ctk.CTk):
             return
         theme.apply_appearance(mode)
         self._appearance = mode
+        self._history_view.refresh_theme()
 
     def on_pause(self) -> None:
         """Permite repetir a pausa usando o snapshot congelado após falha."""
@@ -262,7 +361,7 @@ class Application(ctk.CTk):
         """Só apresenta a finalização após o retorno confirmado do serviço."""
         self._run(self._timer.finish_session)
 
-    def _run(self, command: Callable[[], object]) -> None:
+    def _run(self, command: Callable[[], object], *, validation_message: str | None = None) -> None:
         if self._closed:
             return
         try:
@@ -272,7 +371,7 @@ class Application(ctk.CTk):
             self._failed = self._timer.persistence_failed
             self._refresh()
         except Exception as error:
-            self._handle_error(error)
+            self._handle_error(error, validation_message=validation_message)
 
     def _refresh(self) -> None:
         session = self._timer.get_active_session()
@@ -340,7 +439,7 @@ class Application(ctk.CTk):
         elif choice is False:
             self.on_finish()
 
-    def _handle_error(self, error: Exception) -> None:
+    def _handle_error(self, error: Exception, *, validation_message: str | None = None) -> None:
         self._timer.freeze()
         self._failed = True
         self._history_view.show_error()
@@ -352,8 +451,8 @@ class Application(ctk.CTk):
         except Exception:
             self._render()
         message = (
-            "O nome deve conter no máximo 120 caracteres."
-            if isinstance(error, ValueError)
+            validation_message
+            if isinstance(error, ValueError) and validation_message is not None
             else "Não foi possível confirmar a operação. A contagem foi interrompida. "
             "Tente novamente. A janela permanecerá aberta se os dados não puderem ser salvos."
         )
@@ -374,6 +473,8 @@ class Application(ctk.CTk):
             self._handle_error(error)
             return
         self._closed = True
+        if self._date_picker is not None and self._date_picker.winfo_exists():
+            self._date_picker.close()
         if self._type_dialog is not None and self._type_dialog.winfo_exists():
             self._type_dialog.close()
         for job in (self._tick_job, self._heartbeat_job, self._recovery_job):

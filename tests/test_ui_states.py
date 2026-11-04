@@ -52,6 +52,25 @@ class Widget:
     protocol = grid
     lift = grid
     update_idletasks = grid
+    tag_lower = grid
+
+    def winfo_width(self) -> int:
+        return int(self.options.get("width", 800))
+
+    def winfo_height(self) -> int:
+        return int(self.options.get("height", 300))
+
+    def _get_widget_scaling(self) -> float:
+        return 1.0
+
+    def create_text(self, *args: object, **kwargs: object) -> int:
+        return 1
+
+    create_line = create_text
+    create_rectangle = create_text
+
+    def bbox(self, *args: object) -> None:
+        return None
 
     def winfo_id(self) -> int:
         return 0
@@ -110,13 +129,17 @@ def ui_modules(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[ModuleType, Mo
         "CTkEntry",
         "CTkOptionMenu",
         "CTkToplevel",
+        "CTkProgressBar",
     ):
         ctk.__dict__[name] = Widget
     ctk.__dict__["set_appearance_mode"] = Mock()
+    ctk.__dict__["get_appearance_mode"] = Mock(return_value="Dark")
     dialogs = Mock()
     dialogs.askyesnocancel.return_value = None
     tk = ModuleType("tkinter")
     tk.__dict__["messagebox"] = dialogs
+    tk.__dict__["Canvas"] = Widget
+    tk.__dict__["Event"] = Widget
     monkeypatch.setitem(sys.modules, "customtkinter", ctk)
     monkeypatch.setitem(sys.modules, "tkinter", tk)
     root = Path(__file__).resolve().parent.parent
@@ -125,6 +148,8 @@ def ui_modules(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[ModuleType, Mo
         ("app.ui.theme", "app/ui/theme.py"),
         ("app.ui.study_type_dialog", "app/ui/study_type_dialog.py"),
         ("app.ui.timer_view", "app/ui/timer_view.py"),
+        ("app.ui.study_chart", "app/ui/study_chart.py"),
+        ("app.ui.date_picker", "app/ui/date_picker.py"),
         ("app.ui.history_view", "app/ui/history_view.py"),
         ("app.application", "app/application.py"),
     ):

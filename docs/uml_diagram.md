@@ -54,8 +54,9 @@ classDiagram
         -_type_dialog: StudyTypeDialog | None
         -_power: WindowsPowerMonitor
         -_history_view: HistoryView
-        -_calendar_month: CalendarMonth
-        -_selected_day: date
+        -_history_selection: HistorySelection
+        -_history_parent: HistorySelection | None
+        -_date_picker: DatePicker | None
         -_visible_view: ViewName
         -_views: ViewsByName
         -_timer_view: TimerView
@@ -74,7 +75,13 @@ classDiagram
         -_reload_types() None
         -_type_saved(type_id: int | None) None
         +show_view(name: ViewName) None
-        +on_month(delta: int) None
+        +on_period_step(delta: int) None
+        +on_period_mode(period: ReportPeriod) None
+        +on_type_filter(type_id: int | None) None
+        +on_clear_filter() None
+        +on_bucket(index: int) None
+        +on_history_back() None
+        +on_pick_date() None
         +on_day(day: date) None
         +on_today() None
         -_refresh_history() None
@@ -121,30 +128,29 @@ classDiagram
         +close() None
     }
     class HistoryView {
-        +total_labels: list~CTkLabel~
-        +day_buttons: list~CTkButton~
-        +previous_button: CTkButton
-        +next_button: CTkButton
-        +today_button: CTkButton
-        +month_label: CTkLabel
-        +month_total_label: CTkLabel
-        +day_label: CTkLabel
-        +more_button: CTkButton
+        +report: PeriodReport | None
+        +chart: StudyChart
+        +period_label: CTkButton
+        +total_label: CTkLabel
+        +average_label: CTkLabel
         +status_label: CTkLabel
-        -_on_day: DayCallback
-        -_details: CTkFrame
-        -_empty_label: CTkLabel
         -_session_rows: list~CTkLabel~
-        -_session_data: SessionSummaries
-        -_session_limit: int
-        -_details_key: object
-        -_calendar_key: object
-        -_totals: PeriodTotals | None
-        +__init__(master: CTkFrame, on_month: MonthCallback, on_day: DayCallback, on_today: Callback)
-        +render(reference: date, totals: PeriodTotals, year: int, month: int, days: SecondsByDay, selected: date, sessions: list~SessionSummary~) None
+        +__init__(master: CTkFrame, on_step, on_mode, on_day_picker, on_today, on_filter, on_clear_filter, on_bucket, on_back)
+        +render(report: PeriodReport, today: date, parent_period: ReportPeriod | None) None
+        +refresh_theme() None
         +show_error() None
-        -_render_sessions() None
-        -_show_more() None
+    }
+    class StudyChart {
+        +selected_index: int | None
+        +__init__(master: CTkFrame, on_select: BucketCallback)
+        +render(report: PeriodReport) None
+        +refresh_theme() None
+        +select_bucket(index: int) None
+    }
+    class DatePicker {
+        +__init__(master: CTk, selected: date, on_select: DayCallback, max_date: date)
+        +select_day(day: date) None
+        +close() None
     }
 
     class TimerService {
@@ -192,6 +198,8 @@ classDiagram
         -_timezone_source: TimezoneSource
         +__init__(repository: StudyRepository, timezone_source: TimezoneSource)
         +get_today() date
+        +get_period_dates(selection: HistorySelection) LocalDates
+        +get_period_report(selection: HistorySelection, now: ClockSnapshot | None) PeriodReport
         +get_totals(reference: date, now: ClockSnapshot | None) PeriodTotals
         +get_month_days(year: int, month: int, now: ClockSnapshot | None) SecondsByDay
         +get_day_sessions(day: date, now: ClockSnapshot | None) list~SessionSummary~
@@ -241,6 +249,8 @@ classDiagram
         +recover_pending() Session | None
         +get_report_intervals(start: int, end: int, active_interval_id: int | None) SessionIntervals
         +get_zero_duration_sessions(start: int, end: int) list~Session~
+        +get_period_intervals(start: int, end: int, active_interval_id: int | None) TypedSessionIntervals
+        +get_zero_duration_report_sessions(start: int, end: int) TypedSessions
         +get_study_type(type_id: int) StudyType | None
         +list_study_types(include_archived: bool) list~StudyType~
         +create_study_type(name: str, color_key: StudyColor) StudyType
@@ -278,8 +288,12 @@ classDiagram
     CTk <|-- Application
     CTkFrame <|-- TimerView
     CTkScrollableFrame <|-- HistoryView
+    CTkFrame <|-- StudyChart
+    CTkToplevel <|-- DatePicker
     Application "1" *-- "1" TimerView : tela timer
     Application "1" *-- "1" HistoryView : tela history
+    HistoryView "1" *-- "1" StudyChart : grafico
+    Application "1" *-- "0..1" DatePicker : calendario compacto
     Application --> TimerService : _timer injetado
     Application --> ReportService : _reports injetado
     Application --> StudyTypeService : _types injetado
@@ -298,12 +312,13 @@ classDiagram
     StudyRepository --> SQLiteConnection : _connection
 
     note for Application "Mantem servicos ao navegar. Agenda after 250 ms e heartbeat 5 s; fechamento so destroi apos pausa confirmada."
-    note for HistoryView "CTkScrollableFrame inclui um container externo. Application usa lift para apresenta-lo acima do Cronometro."
+    note for HistoryView "Recebe PeriodReport; exibe metricas, grafico, ranking e sessoes da mesma selecao. Container externo e elevado por lift."
+    note for StudyChart "Desenha segundos prontos, sem consultas. Selecao por mouse/teclado; tema redesenha Canvas e dica."
     note for TimerService "Ciclo, heartbeat e recuperacao implementados. Falha SQLite congela, sinaliza e propaga; sucesso exige COMMIT."
     note for StudyRepository "Cada comando de escrita possui BEGIN IMMEDIATE, validacao e COMMIT ou rollback integral."
     note for StudyTypeService "Catalogo sem widgets, exposto pelo Cronometro e dialogo no bloco 2."
     note for PreferencesService "Persiste light/dark. Application aplica o modo antes dos widgets e permite trocar em execucao."
-    note for ReportService "Agrega segundos entre fronteiras locais historicas. Snapshot substitui checkpoint sem dupla soma."
+    note for ReportService "Entrega um PeriodReport coerente para selecao/filtro. Agrega segundos entre fronteiras locais; snapshot substitui checkpoint sem dupla soma."
     note for ClockService "Implementado. Somente tick aceita tempo; pausa preserva o ultimo snapshot e seu motivo."
     note for WindowsPowerMonitor "WM_POWERBROADCAST na thread da janela. Congela via callback; SQL e UI ficam para a fila Tk."
 ```
@@ -322,13 +337,14 @@ ou classes no código:
 | `Callback` | `Callable[[], None]` |
 | `Command` | `Callable[[], object]` |
 | `TimezoneSource` | `Callable[[], tzinfo]` |
-| `CalendarMonth` | `tuple[int, int]` |
 | `DayCallback` | `Callable[[date], None]` |
-| `MonthCallback` | `Callable[[int], None]` |
-| `SessionSummaries` | `tuple[SessionSummary, ...]` |
+| `BucketCallback` | `Callable[[int], None]` |
 | `Bounds` | `tuple[int, int]` |
 | `ReportSegments` | `list[tuple[Session, int, int]]` |
 | `SessionIntervals` | `list[tuple[Session, StudyInterval]]` |
+| `TypedSessionIntervals` | `list[tuple[Session, StudyInterval, StudyType \| None]]` |
+| `TypedSessions` | `list[tuple[Session, StudyType \| None]]` |
+| `LocalDates` | `tuple[date, date]`, término exclusivo |
 | `WinDLL` | Biblioteca carregada por `ctypes.WinDLL`; None antes de start |
 | `NativeSubclassProc` | Callback ctypes WINFUNCTYPE com retorno e parâmetros de tamanho nativo |
 
@@ -465,6 +481,60 @@ classDiagram
         +name: str
         +duration_s: int
     }
+    class ReportPeriod {
+        <<enumeration>>
+        DAY = day
+        WEEK = week
+        MONTH = month
+    }
+    class HistorySelection {
+        <<dataclass>>
+        +period: ReportPeriod
+        +reference: date
+        +type_filter: Literal all untyped type
+        +study_type_id: int | None
+    }
+    class StudyTypeTotal {
+        <<dataclass>>
+        +type_id: int | None
+        +name: str
+        +color_key: StudyColor | None
+        +duration_s: int
+        +percentage: float
+    }
+    class ReportBucket {
+        <<dataclass>>
+        +start_utc: int
+        +end_utc: int
+        +label: str
+        +day: date
+        +totals: tuple~StudyTypeTotal~
+        +duration_s: int
+    }
+    class PeriodSessionSummary {
+        <<dataclass>>
+        +session_id: int
+        +name: str
+        +study_type_id: int | None
+        +type_name: str
+        +color_key: StudyColor | None
+        +day: date
+        +duration_s: int
+    }
+    class PeriodReport {
+        <<dataclass>>
+        +selection: HistorySelection
+        +start_day: date
+        +end_day: date
+        +start_utc: int
+        +end_utc: int
+        +total_s: int
+        +average_s: float
+        +average_days: int
+        +buckets: tuple~ReportBucket~
+        +ranking: tuple~StudyTypeTotal~
+        +sessions: tuple~PeriodSessionSummary~
+    }
     class SessionStatus {
         <<enumeration>>
         RUNNING = running
@@ -494,6 +564,14 @@ classDiagram
     StudyType --> StudyColor : color_key
     ClockSnapshot ..> StudyInterval : identifica por interval_id
     SessionSummary ..> Session : identifica por session_id
+    HistorySelection --> ReportPeriod : modo
+    HistorySelection ..> StudyType : filtro por id
+    PeriodReport --> HistorySelection : consulta
+    PeriodReport *-- ReportBucket : buckets
+    PeriodReport *-- StudyTypeTotal : ranking
+    PeriodReport *-- PeriodSessionSummary : contribuicoes
+    ReportBucket --> StudyTypeTotal : composicao
+    PeriodSessionSummary ..> Session : identifica por session_id
 
     class TimerService
     class ReportService
@@ -518,6 +596,7 @@ classDiagram
     ReportService ..> ClockSnapshot : recebe tempo validado
     ReportService ..> PeriodTotals : retorna totais atuais
     ReportService ..> SessionSummary : retorna contribuicao diaria
+    ReportService ..> PeriodReport : retorna resultado do periodo
 
     note for Session "Mapeia sessions. Nao possui uma lista de intervalos como atributo Python."
     note for StudyInterval "Mapeia study_intervals. O vinculo com Session existe no SQLite."
@@ -537,6 +616,15 @@ mesma transação. O diagrama não adiciona um atributo `intervals` à dataclass
 `ClockSnapshot`, `ClockReading`, `PeriodTotals` e `SessionSummary` são objetos de
 transferência em memória, não tabelas SQLite. O resumo representa a parcela de
 uma sessão no dia consultado; não contém todos os intervalos dessa sessão.
+
+`HistorySelection`, `PeriodReport`, `ReportBucket`, `StudyTypeTotal` e
+`PeriodSessionSummary` também são modelos em memória. O último descreve a parcela
+de uma sessão no período/filtro selecionado, sem armazenar uma cópia no banco.
+Seu campo `day` identifica a primeira data local de contribuição nesse período.
+`ReportBucket.duration_s` é uma propriedade derivada da soma de seus tipos.
+O término `end_day` e as fronteiras UTC do relatório são exclusivos. Os métodos
+antigos de totais e sessões diárias continuam no serviço para compatibilidade,
+mas a tela usa o resultado único por período.
 
 `StudyType` mapeia `study_types`; `name_key` é detalhe da persistência, não campo
 do modelo público. `Session.study_type_id=None` significa Sem tipo e preserva
@@ -638,8 +726,14 @@ serviço inexistentes.
 | [logging_config.py](../app/logging_config.py) | `configure_logging(log_file: Path) -> None`, `prepare_windowed_streams() -> None` | Logs rotativos de 1 MiB com três anteriores; fornece destino nulo para stdout/stderr ausentes em pythonw/EXE. Não grava mensagens brutas das bibliotecas. |
 | [validation.py](../app/validation.py) | `normalize_session_name(name: str) -> str`, `normalize_study_type_name(name: str) -> str` | Preserva o contrato de sessão (120 caracteres) e acrescenta normalização de tipo (NFKC, controles, espaços, limite de 60 e nome reservado). |
 | [startup_dialog.py](../app/ui/startup_dialog.py) | `show_startup_message(message: str) -> None` | Usada por `main()`; chama MessageBoxW do Windows para apresentar texto estático sem caminhos privados. |
-| [formatting.py](../app/ui/formatting.py) | `format_minutes(seconds: int) -> str`, `format_clock(seconds: int) -> str` | Formata os segundos já agregados pelo serviço. Usada por HistoryView para cartões/células e detalhes diários. |
-| [history_view.py](../app/ui/history_view.py) | `intensity_color(seconds: int) -> str` | Seleciona faixas fixas de intensidade dos dias do calendário. |
+| [formatting.py](../app/ui/formatting.py) | `format_duration_compact(seconds: int \| float) -> str` nas métricas e `format_clock(seconds: int) -> str` nos detalhes. | Apresenta segundos já agregados; não reconstrói totais a partir das médias ou textos. Os formatadores anteriores continuam disponíveis para consumidores existentes. |
+| [theme.py](../app/ui/theme.py) | `apply_appearance(mode)`, `resolve_color(color, mode)` e adaptação de teclado. | Compartilha os pares Claro/Escuro com widgets e resolve cores simples para o Canvas. |
+
+`StudyChart` e `DatePicker` são componentes de UI, representados na primeira
+vista. A seleção do gráfico chama um callback com índice do bucket; o seletor
+de data entrega uma `date`. `HistoryView` não consulta SQLite ou o relógio.
+Seus callbacks de navegação levam uma unidade de período, enumeração de modo,
+id opcional de tipo ou índice; ações sem argumento usam `Callback`.
 
 O repositório mantém apenas a conexão de trabalho. As conexões temporárias de
 validação e backup são abertas e fechadas nos próprios módulos de infraestrutura.
@@ -661,7 +755,7 @@ validação e backup são abertas e fechadas nos próprios módulos de infraestr
 | Estado visual | idle sem pendência; running com contagem ativa; paused/recovered com contagem parada. Em falha, o banco pode ainda estar running e a tela mostra operação não confirmada com controles para nova tentativa. |
 | Fechamento | WM_DELETE_WINDOW persiste paused antes de cancelar callbacks e destruir a janela. Falha conserva janela e snapshot, sem confirmar sucesso. |
 | Energia Windows | Suspensão e variantes de retomada congelam o último snapshot, sem amostrar tempo. A fila Tk persiste paused antes de ticks/ações; mensagens duplicadas não criam intervalos. Apenas ação explícita retoma. |
-| Relatórios | Somam segundos antes de formatar minutos, usam fronteiras locais históricas e substituem o checkpoint ativo sem dupla soma. Histórico recebe resultados e callbacks; calendário independente dos cartões. |
+| Relatórios | Somam segundos antes de formatar minutos, usam fronteiras locais históricas e substituem o checkpoint ativo sem dupla soma. Métricas, buckets, ranking e sessões usam a mesma seleção/filtro. |
 | Persistência | WAL, synchronous FULL, FKs e transações explícitas; SQL parametrizado e validação antes do COMMIT. |
 | Dados locais | Banco e logs no perfil LOCALAPPDATA, fora do executável. Backups automáticos validados com retenção de cinco, além das cópias anteriores à restauração com retenção própria. |
 | Migração | Esquema v2. Origem v1 protegida por backup validado antes de DDL; migração atômica antes da recuperação da sessão. Não há downgrade automático. |
@@ -677,14 +771,17 @@ validação e backup são abertas e fechadas nos próprios módulos de infraestr
   de falhas com escritas atômicas; backups/restauração,
   lock de instância, logs, comandos da UI, ticks/heartbeats, diálogos de recuperação
   e erro e fechamento com pausa salva; navegação entre as duas telas.
-- **Histórico implementado:** cartões atuais, calendário e total do mês exibido,
-  detalhes paginados e atualização com snapshot ativo antes do heartbeat.
+- **Histórico implementado:** Dia/Semana/Mês, seleção de data compacta, barras
+  empilhadas por tipo, total/média, ranking, filtros e sessões paginadas.
+  Atualização usa o snapshot ativo antes do heartbeat e preserva o período escolhido.
 - **Bloco 1 implementado:** migração v1 → v2 e restauração compatível, catálogo
   de tipos e preferência de aparência nos serviços, vínculo opcional da sessão.
 - **Bloco 2 implementado:** seleção e gerenciamento de tipos, descrição independente,
   aparência Claro/Escuro persistida, teclado e remoção das instruções permanentes.
-  Os gráficos por período e a ampliação da CI aguardam os blocos seguintes e o
-  commit do usuário. O esquema e as regras temporais foram preservados.
+- **Bloco 3 implementado:** modelos e resultado único por período, tipos sem
+  perda do histórico arquivado, faixas locais históricas e navegação com retorno.
+  A ampliação da CI aguarda o bloco 4 e o commit do usuário. O esquema v2,
+  dependências, ícone e regras do cronômetro foram preservados.
 - **Aceite local:** inclui cenários de Tk real isolados por processo; ver
   [resultados e limites](acceptance_report.md).
 - **Integração Windows implementada:** WindowsPowerMonitor trata suspensão e

@@ -1,14 +1,14 @@
-"""Histórico com cartões, calendário local e detalhes diários paginados."""
+"""Histórico por período e tipo, alimentado por um único relatório imutável."""
 
-import calendar
 from collections.abc import Callable
-from datetime import date
+from datetime import date, timedelta
 
 import customtkinter as ctk
 
-from app.models import PeriodTotals, SessionSummary
+from app.models import PeriodReport, PeriodSessionSummary, ReportPeriod
 from app.ui import theme
-from app.ui.formatting import format_clock, format_minutes
+from app.ui.formatting import format_clock, format_duration_compact
+from app.ui.study_chart import StudyChart
 
 MONTH_NAMES = (
     "Janeiro",
@@ -26,173 +26,376 @@ MONTH_NAMES = (
 )
 
 
-def intensity_color(seconds: int) -> theme.Color:
-    """Faixas fixas em segundos; não mudam de significado ao trocar de mês."""
-    if seconds <= 0:
-        return ("#E8EDF3", "#3A3A3A")
-    if seconds < 15 * 60:
-        return ("#D9EAFB", "#315E79")
-    if seconds < 60 * 60:
-        return ("#BBD8F4", "#226C9C")
-    if seconds < 120 * 60:
-        return ("#93BDE6", "#175596")
-    return ("#69A1D5", "#10366E")
-
-
 class HistoryView(ctk.CTkScrollableFrame):
-    """Recebe resultados prontos e callbacks, sem SQL ou cálculo de duração."""
+    """Renderiza dados prontos sem executar SQL ou calcular durações."""
 
     def __init__(
         self,
         master: ctk.CTkFrame,
-        on_month: Callable[[int], None],
-        on_day: Callable[[date], None],
+        on_step: Callable[[int], None],
+        on_mode: Callable[[ReportPeriod], None],
+        on_day_picker: Callable[[], None],
         on_today: Callable[[], None],
+        on_filter: Callable[[int | None], None],
+        on_clear_filter: Callable[[], None],
+        on_bucket: Callable[[int], None],
+        on_back: Callable[[], None],
     ) -> None:
-        super().__init__(master, fg_color=theme.SURFACE)
-        self.grid_columnconfigure((0, 1, 2), weight=1)
-        ctk.CTkLabel(self, text="Histórico", font=("Segoe UI", 28)).grid(
-            row=0, column=0, columnspan=3, padx=24, pady=32
-        )
-        self.total_labels: list[ctk.CTkLabel] = []
-        for column, label in enumerate(("Hoje", "Esta semana", "Mês atual")):
-            card = ctk.CTkFrame(self, fg_color=theme.SIDEBAR)
-            card.grid(row=1, column=column, padx=8, pady=16, sticky="ew")
-            ctk.CTkLabel(card, text=label).pack(padx=12, pady=(12, 4))
-            total = ctk.CTkLabel(card, text="—", font=("Segoe UI", 24))
-            total.pack(padx=12, pady=(4, 12))
-            self.total_labels.append(total)
-        navigation = ctk.CTkFrame(self, fg_color="transparent")
-        navigation.grid(row=2, column=0, columnspan=3, padx=12, pady=(12, 0), sticky="ew")
-        navigation.grid_columnconfigure(1, weight=1)
-        self.previous_button = ctk.CTkButton(
-            navigation, text="◀", width=44, command=lambda: on_month(-1)
-        )
-        self.previous_button.grid(row=0, column=0, padx=4)
-        self.month_label = ctk.CTkLabel(navigation, text="", font=("Segoe UI", 20))
-        self.month_label.grid(row=0, column=1, padx=8)
-        self.next_button = ctk.CTkButton(
-            navigation, text="▶", width=44, command=lambda: on_month(1)
-        )
-        self.next_button.grid(row=0, column=2, padx=4)
-        self.today_button = ctk.CTkButton(navigation, text="Hoje", width=60, command=on_today)
-        self.today_button.grid(row=0, column=3, padx=4)
-        self.month_total_label = ctk.CTkLabel(self, text="")
-        self.month_total_label.grid(row=3, column=0, columnspan=3, pady=8)
-        cells = ctk.CTkFrame(self)
-        cells.grid(row=4, column=0, columnspan=3, padx=12, sticky="ew")
-        self.day_buttons: list[ctk.CTkButton] = []
-        self._on_day = on_day
-        for column, name in enumerate(("Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom")):
-            cells.grid_columnconfigure(column, weight=1, uniform="days")
-            ctk.CTkLabel(cells, text=name).grid(row=0, column=column, pady=4)
-        for slot in range(42):
-            button = ctk.CTkButton(cells, text="", width=60, height=46, corner_radius=6)
-            button.grid(row=slot // 7 + 1, column=slot % 7, padx=2, pady=2, sticky="ew")
-            self.day_buttons.append(button)
-        self.day_label = ctk.CTkLabel(self, text="", font=("Segoe UI", 18))
-        self.day_label.grid(row=6, column=0, columnspan=3, pady=8)
-        self._details = ctk.CTkFrame(self)
-        self._details.grid(row=7, column=0, columnspan=3, padx=12, sticky="ew")
-        self._details.grid_columnconfigure(0, weight=1)
-        self._empty_label = ctk.CTkLabel(self._details, text="Nenhuma sessão neste dia.")
-        self._session_rows: list[ctk.CTkLabel] = []
-        self._session_data: tuple[SessionSummary, ...] = ()
+        super().__init__(master, fg_color=theme.BACKGROUND)
+        self.report: PeriodReport | None = None
+        self._on_filter = on_filter
         self._session_limit = 50
-        self._details_key: tuple[date, tuple[SessionSummary, ...]] | None = None
-        self.more_button = ctk.CTkButton(self, text="Mostrar mais", command=self._show_more)
-        self.more_button.grid(row=8, column=0, columnspan=3, pady=12)
-        self.status_label = ctk.CTkLabel(self, text="")
-        self.status_label.grid(row=9, column=0, columnspan=3, pady=8)
-        self._calendar_key: object = None
-        self._totals: PeriodTotals | None = None
+        self._rank_limit = 10
+        self._selection_key: object = None
+        self._session_data: tuple[PeriodSessionSummary, ...] = ()
+        self._session_rows: list[ctk.CTkLabel] = []
+        self._ranking_rows: list[tuple[ctk.CTkButton, ctk.CTkProgressBar, ctk.CTkLabel]] = []
+        self._average_tip: ctk.CTkToplevel | None = None
+        self._wide: bool | None = None
+        self._layout_key: object = None
+        self.grid_columnconfigure((0, 1), weight=1, uniform="history")
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=(16, 12))
+        header.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            header, text="Histórico", font=("Segoe UI", 28, "bold"), text_color=theme.TEXT
+        ).grid(row=0, column=0, sticky="w")
+        modes = ctk.CTkFrame(header, fg_color=theme.SIDEBAR)
+        modes.grid(row=0, column=1, sticky="e")
+        self.period_buttons: dict[ReportPeriod, ctk.CTkButton] = {}
+        for column, (mode, label) in enumerate(
+            ((ReportPeriod.DAY, "Dia"), (ReportPeriod.WEEK, "Semana"), (ReportPeriod.MONTH, "Mês"))
+        ):
+            button = ctk.CTkButton(
+                modes, text=label, width=72, command=lambda value=mode: on_mode(value)
+            )
+            button.grid(row=0, column=column, padx=2, pady=2)
+            theme.keyboard_button(button)
+            self.period_buttons[mode] = button
+        nav = ctk.CTkFrame(self, fg_color="transparent")
+        nav.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
+        nav.grid_columnconfigure(1, weight=1)
+        self.previous_button = ctk.CTkButton(nav, text="‹", width=40, command=lambda: on_step(-1))
+        self.previous_button.grid(row=0, column=0, padx=(0, 6))
+        self.period_label = ctk.CTkButton(
+            nav,
+            text="",
+            command=on_day_picker,
+            fg_color=theme.SURFACE,
+            text_color=theme.TEXT,
+            hover_color=theme.SELECTION,
+            height=34,
+        )
+        self.period_label.grid(row=0, column=1, sticky="ew")
+        self.next_button = ctk.CTkButton(nav, text="›", width=40, command=lambda: on_step(1))
+        self.next_button.grid(row=0, column=2, padx=6)
+        self.today_button = ctk.CTkButton(nav, text="Hoje", width=60, command=on_today)
+        self.today_button.grid(row=0, column=3)
+        for button in (
+            self.previous_button,
+            self.period_label,
+            self.next_button,
+            self.today_button,
+        ):
+            theme.keyboard_button(button)
+        metrics = ctk.CTkFrame(self, fg_color=theme.SURFACE, corner_radius=12)
+        metrics.grid(row=2, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
+        metrics.grid_columnconfigure((0, 1), weight=1)
+        self.average_label = ctk.CTkLabel(
+            metrics, text="", font=("Segoe UI", 28, "bold"), text_color=theme.TEXT, anchor="w"
+        )
+        self.average_label.grid(row=0, column=0, padx=20, pady=(12, 0), sticky="ew")
+        self.average_caption = ctk.CTkLabel(metrics, text="", text_color=theme.MUTED, anchor="w")
+        self.average_caption.grid(row=1, column=0, padx=20, pady=(0, 12), sticky="w")
+        self.total_label = ctk.CTkLabel(
+            metrics, text="", font=("Segoe UI", 24, "bold"), text_color=theme.TEXT, anchor="e"
+        )
+        self.total_label.grid(row=0, column=1, padx=20, pady=(12, 0), sticky="ew")
+        self.total_caption = ctk.CTkLabel(metrics, text="", text_color=theme.MUTED, anchor="e")
+        self.total_caption.grid(row=1, column=1, padx=20, pady=(0, 12), sticky="e")
+        self.average_label.bind("<Enter>", lambda event: self._show_average_tip())
+        self.average_label.bind("<Leave>", lambda event: self._hide_average_tip())
+        context = ctk.CTkFrame(self, fg_color="transparent")
+        context.grid(row=3, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 8))
+        context.grid_columnconfigure(0, weight=1)
+        self.filter_label = ctk.CTkLabel(context, text="", text_color=theme.TEXT, anchor="w")
+        self.filter_label.configure(wraplength=220, justify="left")
+        self.filter_label.grid(row=0, column=0, sticky="w")
+        self.clear_filter_button = ctk.CTkButton(
+            context, text="Todos os tipos", width=120, command=on_clear_filter
+        )
+        self.clear_filter_button.grid(row=0, column=1, padx=4)
+        self.back_button = ctk.CTkButton(context, text="", width=140, command=on_back)
+        self.back_button.grid(row=0, column=2, padx=4)
+        for button in (self.clear_filter_button, self.back_button):
+            theme.keyboard_button(button)
+        self.chart = StudyChart(self, on_bucket)
+        self.chart.grid(row=4, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
+        self._ranking_panel = ctk.CTkFrame(self, fg_color=theme.SURFACE, corner_radius=12)
+        self._ranking_panel.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            self._ranking_panel,
+            text="Tipos mais estudados",
+            text_color=theme.TEXT,
+            font=("Segoe UI", 19, "bold"),
+        ).grid(row=0, column=0, sticky="w", padx=16, pady=12)
+        self._ranking_body = ctk.CTkFrame(self._ranking_panel, fg_color="transparent")
+        self._ranking_body.grid(row=1, column=0, sticky="ew", padx=12)
+        self._ranking_body.grid_columnconfigure(0, weight=1)
+        self.more_types_button = ctk.CTkButton(
+            self._ranking_panel, text="Mostrar mais tipos", command=self._show_more_types
+        )
+        self.more_types_button.grid(row=2, column=0, pady=12)
+        theme.keyboard_button(self.more_types_button)
+        self._session_panel = ctk.CTkFrame(self, fg_color=theme.SURFACE, corner_radius=12)
+        self._session_panel.grid_columnconfigure(0, weight=1)
+        self.day_label = ctk.CTkLabel(
+            self._session_panel,
+            text="Sessões do período",
+            font=("Segoe UI", 19, "bold"),
+            text_color=theme.TEXT,
+        )
+        self.day_label.grid(row=0, column=0, sticky="w", padx=16, pady=12)
+        self._details = ctk.CTkFrame(self._session_panel, fg_color="transparent")
+        self._details.grid(row=1, column=0, sticky="ew", padx=12)
+        self._details.grid_columnconfigure(0, weight=1)
+        self.more_button = ctk.CTkButton(
+            self._session_panel, text="Mostrar mais", command=self._show_more
+        )
+        self.more_button.grid(row=2, column=0, pady=12)
+        theme.keyboard_button(self.more_button)
+        self._empty_label = ctk.CTkLabel(
+            self, text="Sem estudos neste período.", text_color=theme.MUTED
+        )
+        self._empty_label.grid(row=7, column=0, columnspan=2, pady=12)
+        self.status_label = ctk.CTkLabel(self, text="", text_color=theme.ERROR)
+        self.status_label.grid(row=8, column=0, columnspan=2, pady=6)
+        self.bind("<Configure>", lambda event: self._layout_details())
 
     def render(
-        self,
-        reference: date,
-        totals: PeriodTotals,
-        year: int,
-        month: int,
-        days: dict[date, int],
-        selected: date,
-        sessions: list[SessionSummary],
+        self, report: PeriodReport, today: date, parent_period: ReportPeriod | None = None
     ) -> None:
-        """Atualiza só valores alterados; preserva botões e foco durante ticks."""
-        if totals != self._totals:
-            for label, seconds in zip(
-                self.total_labels, (totals.today_s, totals.week_s, totals.month_s), strict=True
-            ):
-                label.configure(text=format_minutes(seconds))
-            self._totals = totals
-        key = (reference, year, month, tuple(days.items()), selected)
-        if key != self._calendar_key:
-            self.month_label.configure(text=f"{MONTH_NAMES[month - 1]} de {year}")
-            self.month_total_label.configure(
-                text=f"Total do mês exibido: {format_minutes(sum(days.values()))}"
+        key = report.selection
+        if key != self._selection_key:
+            self._session_limit, self._rank_limit = 50, 10
+            self._selection_key = key
+        changed = report != self.report
+        if changed:
+            self._hide_average_tip()
+        self.report = report
+        self._session_data = report.sessions
+        period = report.selection.period
+        for mode, button in self.period_buttons.items():
+            button.configure(
+                fg_color=theme.PRIMARY if mode == period else theme.SIDEBAR,
+                text_color=("white" if mode == period else theme.TEXT),
+                hover_color=theme.HOVER if mode == period else theme.SELECTION,
             )
-            self.previous_button.configure(
-                state="disabled" if (year, month) == (1, 1) else "normal"
+        self.period_label.configure(text=self._period_title(report))
+        self.previous_button.configure(
+            state="disabled" if report.start_day == date.min else "normal"
+        )
+        self.next_button.configure(state="normal" if report.end_day <= today else "disabled")
+        total = format_duration_compact(report.total_s)
+        self.average_label.configure(
+            text=total if period == ReportPeriod.DAY else format_duration_compact(report.average_s)
+        )
+        self.average_caption.configure(
+            text="Total estudado no dia" if period == ReportPeriod.DAY else "Média diária"
+        )
+        self.total_label.configure(text="" if period == ReportPeriod.DAY else total)
+        self.total_caption.configure(
+            text=""
+            if period == ReportPeriod.DAY
+            else ("Total semanal" if period == ReportPeriod.WEEK else "Total mensal")
+        )
+        filtered = report.selection.type_filter != "all"
+        name = report.filter_name or "Tipo selecionado"
+        self.filter_label.configure(text=name if filtered else "")
+        if filtered:
+            self.clear_filter_button.grid()
+        else:
+            self.clear_filter_button.grid_remove()
+        if parent_period is not None:
+            self.back_button.configure(
+                text="Voltar à semana" if parent_period == ReportPeriod.WEEK else "Voltar ao mês"
             )
-            self.next_button.configure(
-                state="disabled" if (year, month) == (9998, 12) else "normal"
-            )
-            first_weekday, count = calendar.monthrange(year, month)
-            for slot, button in enumerate(self.day_buttons):
-                number = slot - first_weekday + 1
-                if not 1 <= number <= count:
-                    button.configure(
-                        text="", state="disabled", fg_color=theme.DISABLED, border_width=0
-                    )
-                    continue
-                day = date(year, month, number)
-                seconds = days[day]
-                button.configure(
-                    text=f"{number}\n{format_minutes(seconds)}",
-                    state="normal",
-                    fg_color=intensity_color(seconds),
-                    text_color=theme.TEXT,
-                    border_width=2 if day in (selected, reference) else 0,
-                    border_color="#E4B84B" if day == selected else "#4EB8E8",
-                    command=lambda day=day: self._on_day(day),
-                )
-            self._calendar_key = key
-        details_key = (selected, tuple(sessions))
-        self.day_label.configure(text=f"Sessões de {selected:%d/%m/%Y}")
-        if details_key != self._details_key:
-            # Novos segundos não voltam a paginação ao início no mesmo dia.
-            if self._details_key is None or self._details_key[0] != selected:
-                self._session_limit = 50
-            self._session_data = tuple(sessions)
+            self.back_button.grid()
+        else:
+            self.back_button.grid_remove()
+        if changed:
+            self.chart.render(report)
+            self._render_ranking()
             self._render_sessions()
-            self._details_key = details_key
+        if not report.sessions and report.total_s == 0:
+            self._empty_label.grid()
+        else:
+            self._empty_label.grid_remove()
+        self._layout_details()
         self.status_label.configure(text="")
+
+    @staticmethod
+    def _period_title(report: PeriodReport) -> str:
+        first = report.start_day
+        if report.selection.period == ReportPeriod.MONTH:
+            return f"{MONTH_NAMES[first.month - 1]} de {first.year}"
+        if report.selection.period == ReportPeriod.WEEK:
+            last = report.end_day - timedelta(days=1)
+            return f"{first:%d/%m} – {last:%d/%m/%Y}"
+        return f"{first.day} de {MONTH_NAMES[first.month - 1].lower()} de {first.year}"
+
+    def _layout_details(self) -> None:
+        if self.report is None:
+            return
+        show_sessions = (
+            self.report.selection.period == ReportPeriod.DAY
+            or self.report.selection.type_filter != "all"
+        )
+        logical_width = int(self.winfo_width() / self._get_widget_scaling())
+        wide = logical_width >= 850 and show_sessions
+        key = (self.winfo_width(), show_sessions, len(self._session_rows))
+        if key == self._layout_key:
+            return
+        self._layout_key = key
+        self._ranking_panel.grid(
+            row=5, column=0, columnspan=1 if wide else 2, sticky="nsew", padx=12, pady=(0, 12)
+        )
+        if show_sessions:
+            self._session_panel.grid(
+                row=5 if wide else 6,
+                column=1 if wide else 0,
+                columnspan=1 if wide else 2,
+                sticky="nsew",
+                padx=12,
+                pady=(0, 12),
+            )
+        else:
+            self._session_panel.grid_remove()
+        wrap = max(100, (logical_width // 2 if wide else logical_width) - 150)
+        if wide != self._wide:
+            self._wide = wide
+        for label in self._session_rows[::2]:
+            label.configure(wraplength=wrap)
+
+    def _render_ranking(self) -> None:
+        if self.report is None:
+            return
+        visible = self.report.ranking[: self._rank_limit]
+        while len(self._ranking_rows) > len(visible):
+            for widget in self._ranking_rows.pop():
+                widget.destroy()
+        while len(self._ranking_rows) < len(visible):
+            index = len(self._ranking_rows)
+            button = ctk.CTkButton(
+                self._ranking_body,
+                text="",
+                anchor="w",
+                fg_color="transparent",
+                hover_color=theme.SELECTION,
+                height=30,
+            )
+            button.grid(row=index * 2, column=0, sticky="ew")
+            theme.keyboard_button(button)
+            duration = ctk.CTkLabel(self._ranking_body, text="", text_color=theme.TEXT)
+            button.bind("<Enter>", lambda event, row=index: self._show_rank_tip(row), add="+")
+            button.bind("<Leave>", lambda event: self._hide_average_tip(), add="+")
+            button.bind("<FocusIn>", lambda event, row=index: self._show_rank_tip(row), add="+")
+            button.bind("<FocusOut>", lambda event: self._hide_average_tip(), add="+")
+            duration.grid(row=index * 2, column=1, padx=(8, 0), sticky="e")
+            bar = ctk.CTkProgressBar(self._ranking_body, height=5, fg_color=theme.DISABLED)
+            bar.grid(row=index * 2 + 1, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+            self._ranking_rows.append((button, bar, duration))
+        for (button, bar, duration), item in zip(self._ranking_rows, visible, strict=True):
+            color = theme.STUDY_COLORS[item.color_key] if item.color_key else theme.MUTED
+            button.configure(
+                text="● " + (item.name if len(item.name) <= 30 else item.name[:29] + "…"),
+                text_color=color,
+                command=lambda type_id=item.type_id: self._on_filter(type_id),
+            )
+            bar.configure(progress_color=color)
+            bar.set(item.percentage / 100)
+            duration.configure(
+                text=f"{format_duration_compact(item.duration_s)}  {item.percentage:.0f}%"
+            )
+        if len(self.report.ranking) > self._rank_limit:
+            self.more_types_button.grid()
+        else:
+            self.more_types_button.grid_remove()
 
     def _render_sessions(self) -> None:
         visible = self._session_data[: self._session_limit]
         needed = len(visible) * 2
         while len(self._session_rows) > needed:
             self._session_rows.pop().destroy()
-        self._empty_label.grid_remove()
         while len(self._session_rows) < needed:
             index = len(self._session_rows) // 2
-            label = ctk.CTkLabel(self._details, text="", wraplength=380, anchor="w", justify="left")
-            label.grid(row=index, column=0, padx=8, pady=4, sticky="w")
-            duration = ctk.CTkLabel(self._details, text="")
-            duration.grid(row=index, column=1, padx=8, pady=4, sticky="e")
+            label = ctk.CTkLabel(
+                self._details,
+                text="",
+                anchor="w",
+                justify="left",
+                text_color=theme.TEXT,
+                wraplength=300,
+            )
+            label.grid(row=index, column=0, sticky="ew", pady=5)
+            duration = ctk.CTkLabel(self._details, text="", text_color=theme.TEXT, width=76)
+            duration.grid(row=index, column=1, sticky="e", padx=(8, 0), pady=5)
             self._session_rows.extend((label, duration))
-        for index, session in enumerate(visible):
-            self._session_rows[index * 2].configure(text=session.name)
-            self._session_rows[index * 2 + 1].configure(text=format_clock(session.duration_s))
-        if not self._session_data:
-            self._empty_label.grid(row=0, column=0, padx=12, pady=12)
-        self.more_button.configure(
-            state="normal" if len(self._session_data) > self._session_limit else "disabled"
+        for index, item in enumerate(visible):
+            self._session_rows[index * 2].configure(
+                text=f"{item.name}\n{item.type_name} · {item.day:%d/%m/%Y}"
+            )
+            self._session_rows[index * 2 + 1].configure(text=format_clock(item.duration_s))
+        if len(self._session_data) > self._session_limit:
+            self.more_button.grid()
+        else:
+            self.more_button.grid_remove()
+        self.day_label.configure(
+            text="Sessões do dia"
+            if self.report is not None and self.report.selection.period == ReportPeriod.DAY
+            else "Sessões do período"
         )
 
     def _show_more(self) -> None:
         self._session_limit += 50
         self._render_sessions()
+        self._layout_details()
+
+    def _show_more_types(self) -> None:
+        self._rank_limit += 10
+        self._render_ranking()
+
+    def refresh_theme(self) -> None:
+        self.chart.refresh_theme()
+
+    def _show_average_tip(self) -> None:
+        if self.report is None or self.report.selection.period == ReportPeriod.DAY:
+            return
+        self._show_text_tip(
+            self.average_label, f"Média dos {self.report.average_days} dias do período"
+        )
+
+    def _show_rank_tip(self, index: int) -> None:
+        if self.report is not None and index < len(self._ranking_rows):
+            self._show_text_tip(self._ranking_rows[index][0], self.report.ranking[index].name)
+
+    def _show_text_tip(self, widget: ctk.CTkLabel | ctk.CTkButton, text: str) -> None:
+        self._hide_average_tip()
+        self._average_tip = ctk.CTkToplevel(self)
+        self._average_tip.overrideredirect(True)
+        self._average_tip.geometry(f"+{widget.winfo_rootx()}+{widget.winfo_rooty() + 32}")
+        ctk.CTkLabel(
+            self._average_tip,
+            text=text,
+            wraplength=320,
+            text_color=theme.TEXT,
+            fg_color=theme.SURFACE,
+        ).pack(padx=8, pady=4)
+
+    def _hide_average_tip(self) -> None:
+        if self._average_tip is not None:
+            self._average_tip.destroy()
+            self._average_tip = None
 
     def show_error(self) -> None:
-        """Mantém os valores anteriores identificados como desatualizados."""
         self.status_label.configure(text="Histórico não atualizado · operação não confirmada")

@@ -30,14 +30,20 @@ Python instalado. Os resultados locais estão em [acceptance_report.md](acceptan
 
 1. Abra `release-a\StudyTimer\StudyTimer.exe`. Não deve ser necessário instalar
    Python, baixar dependências ou conectar-se à rede.
-2. Inicie uma sessão com nome sintético. Confirme nome bloqueado e botões
-   coerentes. Pause, aguarde e retome: o intervalo pausado não deve entrar no total.
-3. Finalize duas sessões de aproximadamente 35 segundos. O cartão Hoje deve
-   mostrar 1 minuto depois da soma. Os detalhes mantêm os segundos de cada sessão.
+2. Crie um tipo sintético, selecione-o e inicie uma sessão com descrição sintética.
+   Confirme tipo/descrição bloqueados e botões coerentes. Pause, aguarde e retome:
+   o intervalo pausado não deve entrar no total. Teste também uma sessão Sem tipo.
+3. Finalize duas sessões de aproximadamente 35 segundos do mesmo tipo. No modo
+   Dia do Histórico, o total deve mostrar 1min depois da soma. Os detalhes mantêm
+   os segundos de cada sessão e o ranking atribui os 70 segundos ao mesmo tipo.
 4. Inicie outra sessão e abra Histórico antes do primeiro heartbeat de 5 s.
-   Os detalhes devem mostrar tempo em andamento. Navegue para outro mês:
-   calendário e total mensal mudam, enquanto os três cartões mantêm os períodos
-   atuais. Volte com Hoje e depois com Cronômetro.
+   Os detalhes devem mostrar tempo em andamento. Alterne Dia/Semana/Mês e navegue
+   para um período anterior: métrica, gráfico, ranking e sessões devem se referir
+   ao período selecionado. Selecione uma barra diária, confira seu Dia e volte
+   ao período de origem. Use o calendário compacto para escolher uma data.
+   Filtre um tipo e Sem tipo, remova o filtro com Todos os tipos e confirme
+   que Hoje mantém o modo e retorna ao período atual. Volte ao Cronômetro sem
+   perder ou interromper a sessão.
 5. Feche durante a contagem e reabra. A sessão deve reaparecer pausada, sem
    contabilizar o tempo com o programa fechado. Teste as três escolhas do diálogo
    de recuperação em execuções separadas.
@@ -46,6 +52,13 @@ Python instalado. Os resultados locais estão em [acceptance_report.md](acceptan
    usar o último checkpoint confirmado e continuar pausada. Pode perder o trecho
    posterior ao checkpoint; não pode contar o intervalo em que o app esteve fechado.
 7. Confira legibilidade e navegação em 900×600 e na escala DPI usada na VM.
+   Verifique Claro/Escuro, foco, seleção por teclado, descrições longas,
+   lista com Mostrar mais, gráfico vazio e manutenção da rolagem durante ticks.
+8. Na Semana/Mês, confira a média com os dias transcorridos até hoje no período
+   atual e todos os dias, inclusive sem estudo, no período passado completo.
+   Uma sessão atravessando meia-noite deve contribuir em cada dia apenas com
+   sua parcela, sem duplicar o total. Um tipo arquivado continua no histórico.
+   Troque o tema e reabra a aplicação: a aparência deve persistir.
 
 ## Substituição da pasta do programa
 
@@ -55,8 +68,15 @@ Python instalado. Os resultados locais estão em [acceptance_report.md](acceptan
 3. Abra `release-b\StudyTimer\StudyTimer.exe` na mesma conta Windows. Os totais,
    nomes sintéticos e a sessão pausada devem permanecer disponíveis.
 4. Registre o resultado como substituição de pasta no mesmo esquema/versão.
-   Uma atualização futura com mudança de esquema exigirá testar sua migração
-   explicitamente; este procedimento não comprova uma migração ainda inexistente.
+   Para a atualização de origem v1, use somente banco legado sintético: confirme
+   o backup em before-migration, migração v2 e preservação dos registros antes
+   de validar o Histórico. As mudanças do bloco 3 não criam outra versão do
+   esquema. O teste com fonte não substitui a verificação do pacote candidato.
+
+O pacote aceito em uma entrega anterior ao bloco 3 não certifica estes novos
+fluxos. Gerar o candidato pelo script oficial e registrar a versão e SHA-256
+efetivamente usados. A execução automática completa pertence ao bloco 4; este
+documento é um roteiro de aceite, não evidência de execução nem ativação de CI.
 
 O primeiro teste sem rede não exige alterar o firewall. Um teste adicional com
 regra de firewall específica para o executável pode ser registrado separadamente,

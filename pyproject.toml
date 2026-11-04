@@ -34,5 +34,5 @@ ignore_missing_imports = true
 
 # CustomTkinter não fornece stubs; a exceção se limita à herança dos widgets.
 [[tool.mypy.overrides]]
-module = ["app.application", "app.ui.timer_view", "app.ui.history_view", "app.ui.study_type_dialog"]
+module = ["app.application", "app.ui.timer_view", "app.ui.history_view", "app.ui.study_type_dialog", "app.ui.study_chart", "app.ui.date_picker"]
 disallow_subclassing_any = false

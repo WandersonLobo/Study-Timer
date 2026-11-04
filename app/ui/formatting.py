@@ -12,3 +12,15 @@ def format_clock(seconds: int) -> str:
     hours, rest = divmod(seconds, 3600)
     minutes, seconds = divmod(rest, 60)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def format_duration_compact(seconds: int | float) -> str:
+    """Formata somente após agregação; não perde o sinal de tempo subminuto."""
+    if seconds <= 0:
+        return "0min"
+    if seconds < 60:
+        return "<1min"
+    hours, minutes = divmod(int(seconds // 60), 60)
+    if not hours:
+        return f"{minutes}min"
+    return f"{hours}h {minutes:02d}min" if minutes else f"{hours}h"

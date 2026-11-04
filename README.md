@@ -15,9 +15,9 @@ Ao reabrir, um diálogo permite retomar, finalizar ou manter a sessão pausada.
 Fechar a janela salva uma pausa; falhas mantêm a janela aberta para nova tentativa.
 Suspensão/hibernação e retomada do Windows congelam a contagem e mantêm a sessão
 pausada até uma retomada explícita. O detector de lacunas continua complementar.
-O Histórico inclui cartões atuais, calendário mensal navegável, intensidade e
-sessões por dia, com atualização antes do heartbeat. Relatórios usam fusos
-históricos e somam segundos antes de truncar minutos.
+O Histórico oferece Dia, Semana e Mês, gráficos empilhados por tipo, totais,
+média diária, ranking e sessões do período, com atualização antes do heartbeat.
+Relatórios usam fusos históricos e somam segundos antes de truncar minutos.
 O aceite local está registrado em [resultados](docs/acceptance_report.md).
 Hibernação física e Windows limpo na VM permanecem pendentes.
 
@@ -32,9 +32,18 @@ Tipo e descrição ficam bloqueados até finalizar a sessão. Uma finalização 
 limpa a descrição e mantém a seleção de tipo para o próximo estudo nesta abertura.
 O seletor Claro/Escuro na base da barra lateral salva e reaplica a aparência,
 inclusive após reabrir. As telas não exibem instruções permanentes; estados e
-avisos necessários permanecem. O Histórico mantém seu calendário e relatórios
-atuais, com contraste nos dois temas. Novos gráficos e ampliação da CI pertencem
-aos blocos 3 e 4, aguardando o commit desta etapa. Veja [arquitetura](docs/architecture.md).
+avisos necessários permanecem.
+
+**Bloco 3 — Histórico por período:** Dia, Semana e Mês apresentam o período
+selecionado e podem filtrar Todos os tipos, um tipo ou Sem tipo. O dia usa faixas
+horárias; semana e mês usam barras diárias. Clicar em uma barra diária abre seu
+detalhamento, com retorno ao período anterior; o calendário compacto permite
+escolher outra data. Tipos arquivados continuam no histórico e as sessões mostram
+somente sua contribuição no período. A média diária inclui dias sem estudo e,
+no período atual, considera os dias transcorridos até hoje. Os dois temas usam
+as mesmas regras e cores de tipos. O esquema v2, os dados e o ícone permanecem
+preservados. A ampliação da CI pertence ao bloco 4, aguardando o commit desta
+etapa. Veja [arquitetura](docs/architecture.md) e [validação](docs/testing.md).
 
 ## Estrutura
 
@@ -60,6 +69,12 @@ Study-Timer/
 │   │   ├── clock_snapshot.py
 │   │   ├── pause_reason.py
 │   │   ├── period_totals.py
+│   │   ├── history_selection.py
+│   │   ├── report_period.py
+│   │   ├── report_bucket.py
+│   │   ├── period_report.py
+│   │   ├── period_session_summary.py
+│   │   ├── study_type_total.py
 │   │   ├── session.py
 │   │   ├── session_status.py
 │   │   ├── session_summary.py
@@ -70,6 +85,8 @@ Study-Timer/
 │   ├── ui/
 │   │   ├── timer_view.py
 │   │   ├── history_view.py
+│   │   ├── study_chart.py         # Gráfico de barras com seleção por mouse/teclado
+│   │   ├── date_picker.py         # Calendário compacto de seleção de data
 │   │   ├── theme.py               # Paleta e adaptação de teclado Claro/Escuro
 │   │   ├── study_type_dialog.py   # Cadastro e gerenciamento de tipos
 │   │   ├── formatting.py          # Formatação após agregação

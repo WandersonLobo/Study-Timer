@@ -157,3 +157,26 @@ mudança real de DPI entre monitores ou um pacote novo. Os avisos de fallback
 de fonte observados e os comandos estão em [testes](testing.md). O executável
 e hash da entrega original permanecem anteriores a este bloco. Ícone,
 dependências, build e CI não foram alterados; os blocos 3 e 4 aguardam commit.
+
+## Bloco 3 — Histórico por Dia, Semana, Mês e tipo
+
+Em 04/11/2026, o Histórico passou a apresentar métricas, barras, ranking e
+sessões do mesmo período/filtro. Os relatórios conservam segundos e snapshots,
+incluem tipos arquivados e Sem tipo, respeitam fronteiras locais históricas e
+exibem média parcial do período atual. Não houve alteração no esquema v2,
+dados existentes, ícone, dependências ou regras do relógio.
+
+A suíte final aprovou **354 testes**, com somente o smoke do executável pulado
+por ausência de novo build. Pip check, Ruff, formatação e mypy passaram. São
+42 novos testes do relatório e 16 cenários nativos nos dois temas, incluindo
+o novo fluxo de filtros, barras, retorno, data, tema e contagem ativa.
+
+As capturas de Dia/Semana/Mês nos dois modos e do tamanho mínimo foram
+inspecionadas com dados sintéticos. Consultas de 1.000 sessões e renderização
+da primeira página ficaram abaixo do alvo de dois segundos. Comandos, medidas
+e limites detalhados estão em [testes](testing.md).
+
+Não foi certificado um novo executável, Windows limpo, energia física ou DPI
+entre monitores. Os testes Tk usam relógio controlado e messageboxes simulados;
+não representam a automação externa planejada. A ampliação da CI permanece
+reservada ao bloco 4, aguardando o commit do usuário.
