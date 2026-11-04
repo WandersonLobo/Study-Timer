@@ -4,13 +4,21 @@ import ctypes
 import gc
 import sqlite3
 import sys
+from datetime import UTC, date, datetime
 from typing import Any
 from unittest.mock import Mock
 
 import pytest
 
 from app.database.repository import StudyRepository
-from app.models import PauseReason, SessionStatus
+from app.models import (
+    AppearanceMode,
+    HistorySelection,
+    PauseReason,
+    ReportPeriod,
+    SessionStatus,
+    StudyColor,
+)
 from app.services.timer_service import TimerService
 from app.windows_power import (
     POWER_EVENTS,
@@ -24,6 +32,58 @@ from tests.test_timer import completed_seconds
 
 setup_ui = test_ui_states.setup_ui
 ui_modules = test_ui_states.ui_modules
+
+
+@pytest.mark.parametrize("mode", [AppearanceMode.LIGHT, AppearanceMode.DARK])
+@pytest.mark.parametrize("view", ["timer", "history"])
+@pytest.mark.parametrize("already_paused", [False, True])
+def test_power_events_preserve_type_theme_and_history(
+    setup_ui: tuple[Any, TimerService, StudyRepository, FakeClock, Mock],
+    monkeypatch: pytest.MonkeyPatch,
+    mode: AppearanceMode,
+    view: str,
+    already_paused: bool,
+) -> None:
+    app, timer, repository, source, dialogs = setup_ui
+    reference = date(2024, 5, 10)
+    monkeypatch.setattr(app._reports, "get_today", lambda: reference)
+    monkeypatch.setattr(app._reports, "_timezone_source", lambda: UTC)
+    source.wall_time_s = datetime(2024, 5, 10, 12, tzinfo=UTC).timestamp()
+    app._history_selection = HistorySelection(ReportPeriod.DAY, reference)
+    kind = app._types.create_type("Tipo de energia", StudyColor.BLUE)
+    app._type_saved(kind.id)
+    app.on_appearance("Claro" if mode == AppearanceMode.LIGHT else "Escuro")
+    app.on_start()
+    session = timer.get_active_session()
+    assert session is not None
+    source.advance(SECOND_NS)
+    app.fire(250)
+    if already_paused:
+        app.on_pause()
+    app.show_view(view)
+    source.advance(200_000_000)
+    app._power.notify(4)
+    reads = source.read_count
+    source.advance(3600 * SECOND_NS)
+    app._power.notify(18)
+    app.fire(250)
+    assert source.read_count == reads and not timer.is_running
+    pending = timer.get_active_session()
+    assert pending is not None and pending.study_type_id == kind.id
+    assert pending.status == SessionStatus.PAUSED
+    assert completed_seconds(repository, session.id) == 1
+    assert app._preferences.get_appearance_mode() == mode
+    assert app._timer_view.get_type_id() == kind.id
+    assert len(repository.get_session_intervals(session.id)) == 1
+    if view == "history":
+        assert app._history_view.report.total_s == 1
+        assert app._history_view.report.ranking[0].type_id == kind.id
+    app.on_start()
+    source.advance(SECOND_NS)
+    app.fire(250)
+    app.on_finish()
+    assert completed_seconds(repository, session.id) == 2
+    dialogs.showerror.assert_not_called()
 
 
 @pytest.mark.parametrize("event", sorted(POWER_EVENTS))

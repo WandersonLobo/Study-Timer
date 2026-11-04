@@ -180,3 +180,119 @@ Não foi certificado um novo executável, Windows limpo, energia física ou DPI
 entre monitores. Os testes Tk usam relógio controlado e messageboxes simulados;
 não representam a automação externa planejada. A ampliação da CI permanece
 reservada ao bloco 4, aguardando o commit do usuário.
+
+## Bloco 4 — CI, regressões e executável
+
+Validação em 04/11/2026, Windows 11, Python 3.12.10 x64 e Tcl/Tk 8.6.15.
+O preflight local confirmou desktop de entrada interativo. Foram usados somente
+perfis sintéticos e bancos temporários. Não houve alteração de código de
+produção, esquema v2, dependências ou ícone, nem acesso ao banco pessoal.
+
+O workflow passa a separar `quality`, `native (light)`, `native (dark)` e
+`package`, em push/PR, com timeouts e cancelamento de versões antigas. O pacote
+invoca o build oficial com `-DesktopTests`. A exportação prepara JUnit mínimo,
+metadados permitidos e PNGs da janela própria, com retenção de sete dias;
+bancos, backups, logs e tracebacks brutos não são publicados.
+
+A suíte de regras/persistência aprovou **387 testes**, com 28 casos dependentes
+de ambiente excluídos pela seleção explícita; nenhum teste selecionado foi
+pulado. O JUnit foi aceito por `ci_checks.py verify --group quality`.
+Pip check, Ruff, formatação e mypy passaram em 80 arquivos Python. As sequências
+também conferem IDs/status e cardinalidade de intervalos com SQL independente,
+sem depender somente do validador de produção.
+
+Os 23 testes do preparador/validador de evidências Windows estão incluídos
+nesses 387 casos. Eles verificam hash, matriz pendente, identidade, tipos dos
+campos e consistência dos registros sintéticos. `windows_acceptance.ps1` não
+executa nem supervisiona transições: é uma entrega preparatória, com
+`hardware_certified: false`, mesmo quando os registros declarados são completos.
+VirtualBox 7.2.16 foi localizado, mas a consulta COM retornou `E_ACCESSDENIED`;
+nenhum convidado Windows foi iniciado ou confirmado nesta rodada.
+
+A matriz nativa aprovou **18 cenários**, sem skips, e seu JUnit passou pela
+verificação integral do manifesto. Foram geradas oito capturas de Cronômetro,
+Dia, Semana e Mês em Claro/Escuro. As capturas foram abertas e inspecionadas
+localmente; não foi usada comparação pixel a pixel. A integração das capturas
+revelou uma espera em `Tk.update()`, que tenta esvaziar uma fila alimentada
+pelos redesenhos periódicos. Aumentar o prazo isoladamente não resolveu o caso
+no ambiente neutro. O diagnóstico por stack confirmou a espera; o capturador
+passou a aguardar uma condição pelo loop Tk, com prazo próprio, e o cenário
+visual estático cancela seus callbacks periódicos. Ciclos e atualização ao
+vivo continuam cobertos pelos outros cenários, sem mudar a aplicação.
+Os dois casos visuais corrigidos passaram em 5,77 s no próprio ambiente neutro.
+O prazo externo contempla as quatro capturas e encerra a árvore de processos
+própria em caso de timeout.
+O primeiro build também parou no teste de troca de aparência do Histórico:
+a asserção exigia identidade do relatório, embora `app.update()` possa entregar
+o refresh periódico e criar um valor equivalente. A comparação foi corrigida
+para igualdade de conteúdo, mantendo a seleção e a checagem da nova cor.
+Os dois casos relacionados passaram depois da correção. As execuções
+interrompidas não geraram um novo ZIP final; as correções foram verificadas
+antes da nova execução, sem repetição silenciosa até ficar verde.
+
+### Executável entregue a pedido do usuário
+
+O build oficial seguinte gerou o onedir com esquema v2 e recursos completos.
+Nessa execução passaram **387 testes de regras, 18 de Tk e seis smoke do EXE**:
+**411 aprovados** nas três camadas, sem skips entre os selecionados. O build
+parou nos quatro casos externos: o helper lia pixels do pai com filhos Tk
+recortados, e a movimentação do cursor fora da fila de entrada permitia
+cliques fora de ordem. A fonte foi corrigida com leitura no controle filho
+do próprio PID, movimento/clique na mesma fila e prontidão por execução.
+Ruff, formatação e mypy passaram após as correções.
+
+A tentativa de executar novamente os quatro casos foi rejeitada pela ferramenta
+como `rejected by user`. Ela não foi repetida. Portanto os quatro casos da fonte
+corrigida permanecem **pendentes**, e o job completo `package -DesktopTests`
+não foi aprovado nesta máquina. O gate obrigatório continua ativo na CI.
+
+Após a solicitação explícita de finalizar e entregar o `.exe`, o onedir já
+gerado pelo script oficial foi copiado completo para `dist/bloco4/StudyTimer/`.
+Essa entrega não representa um novo build nem aprovação da bateria externa.
+Foi criado um ZIP da pasta completa para transporte, preservando o artefato
+histórico anterior. `check_bundle.py` passou na origem, na cópia entregue e
+no conteúdo novamente extraído do ZIP. Nenhum perfil de teste foi incluído.
+
+- Executável: `dist/bloco4/StudyTimer/StudyTimer.exe` (2.458.301 bytes).
+- ZIP: `dist/StudyTimer-Windows-v0.1.0-bloco4.zip` (14.458.933 bytes).
+- Checksum: mesmo nome do ZIP seguido de `.sha256`.
+
+```text
+cdc1e44ee46cf368dfccc4e2ad1b5d3f797ed4a0af6988ba9966dd7456613499
+```
+
+O `.exe` depende da pasta `_internal` e dos outros recursos ao seu lado.
+Para transportar, extraia e preserve a pasta completa do ZIP. A aplicação
+mantém os dados em `%LOCALAPPDATA%\StudyTimer\`; eles não ficam nessa pasta
+de programa nem são substituídos pela entrega.
+
+Comandos principais desta rodada:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m ruff format --check .
+.\.venv\Scripts\python.exe -m mypy
+.\.venv\Scripts\python.exe -m pytest -m 'not native_ui and not build' --basetemp .pytest_cache/block4-quality-final --junitxml reports/raw/local-quality-final/tests.xml -q
+$env:STUDYTIMER_NATIVE_UI = '1'
+$env:STUDYTIMER_EVIDENCE_DIR = 'reports/raw/local-native-final/windows'
+.\.venv\Scripts\python.exe -m pytest tests/test_native_ui.py --basetemp .pytest_cache/block4-native-final --junitxml reports/raw/local-native-final/tests.xml -q
+.\.venv\Scripts\python.exe packaging/ci_checks.py verify reports/raw/local-native-final/tests.xml --group native
+.\.venv\Scripts\python.exe packaging/ci_checks.py export reports/raw/local-native-final reports/public/local-native-final
+```
+
+### Aceites externos ainda separados
+
+A execução remota da CI não foi iniciada nesta rodada, que ainda aguarda o
+commit do usuário. Não foi alterada nem comprovada a proteção da branch:
+os checks exigidos e o ensaio de PR deliberadamente falho estão descritos em
+[testing.md](testing.md#checks-obrigatórios-no-repositório-remoto).
+Os testes locais do gate comprovam sua rejeição de falhas/skips e matrizes
+incompletas; não comprovam bloqueio de mesclagem no GitHub.
+
+Windows 10/11 limpo sem Python, operação offline no convidado, transições reais
+de suspensão/hibernação e DPI entre monitores permanecem aceites distintos.
+Tk real com relógio simulado e mensagens Win32 não certificam energia física.
+O controlador e os roteiros estão em [distribuição](distribution_acceptance.md)
+e [energia](manual_power_test.md); nenhuma ação colocou o computador pessoal
+em suspensão.

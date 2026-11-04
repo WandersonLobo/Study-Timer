@@ -4,6 +4,7 @@ Revisão inicial em 29/10/2026; persistência e recuperação atualizadas em 30/
 Migração de esquema e serviços do bloco 1 atualizados em 03/11/2026.
 Interface de tipos e aparência do bloco 2 atualizada em 04/11/2026.
 Histórico por período e filtros do bloco 3 atualizado em 04/11/2026.
+Infraestrutura de validação e evidências do bloco 4 atualizada em 04/11/2026.
 O app continua local, sem login, sincronização ou exportação CSV. O cronômetro e
 o tratamento de falhas funcionam pelos serviços e pela tela Cronômetro.
 Erros em callbacks usam mensagens estáticas e logs sem detalhes privados.
@@ -13,6 +14,23 @@ fila da UI. Retomar o Windows não retoma a sessão. O callback não executa SQL
 não exibe diálogos e não deixa exceções atravessarem a fronteira nativa.
 
 ## Correções aplicadas
+
+- Bloco 4: cada execução usa perfis temporários com dados sintéticos. O smoke
+  valida migração v1 e recuperação sem consultar o perfil pessoal. Fluxos
+  externos enviam mouse/teclado somente à janela do PID criado pelo teste;
+  capturas são limitadas àquela janela, sem capturar o desktop inteiro.
+  As regressões de energia não suspendem nem hibernam o computador executor.
+- Relatórios brutos e dados temporários ficam fora dos artefatos públicos.
+  `packaging/ci_checks.py export` prepara outra pasta com JUnit sanitizado,
+  metadados permitidos e PNG sintético. Não publica mensagens, tracebacks,
+  stdout/stderr, propriedades brutas de testes, bancos, sidecars, backups ou
+  logs. A CI anexa somente essa saída preparada e o pacote já inspecionado.
+  O build continua único, com verificação do ZIP extraído antes de copiar a
+  entrega final. Esquema, dependências e ícone não mudam neste bloco.
+- Pré-condições e verificação de JUnit fazem falta de ambiente, coleta vazia,
+  skips e matrizes incompletas falharem nas etapas obrigatórias. A execução do
+  fluxo remoto e os checks obrigatórios na proteção da branch ainda precisam
+  de evidência; configurar arquivos locais não comprova essas duas medidas.
 
 - Bloco 3: filtros e seleção de data são estado visual em memória. Consultas
   parametrizadas recortam os intervalos e incluem o catálogo por LEFT JOIN,
@@ -191,6 +209,10 @@ preservar todos os arquivos; a função de restauração o rejeita por seguranç
   todos os formatos possíveis de metadados comprimidos ou codificados.
 - Hibernação física e a matriz completa de DPI/hardware permanecem pendentes;
   resultados e limites estão em [acceptance_report.md](acceptance_report.md).
+- O job externo exige desktop Windows interativo e desbloqueado. Um runner
+  dedicado pode ser escolhido por `STUDYTIMER_DESKTOP_RUNNER`; permita seu uso
+  somente por código confiável, pois executa o pacote e gera entradas de usuário.
+  A criação dos jobs não comprova execução remota ou proteção efetiva da branch.
 - Assinatura de código é futura. O SHA-256 confirma a cópia quando comparado a
   um hash obtido de fonte confiável; sozinho não identifica o autor.
 - CSV e nuvem permanecem fora do escopo. CSV futuro deve neutralizar fórmulas;

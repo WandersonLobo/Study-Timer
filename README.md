@@ -42,8 +42,17 @@ escolher outra data. Tipos arquivados continuam no histórico e as sessões most
 somente sua contribuição no período. A média diária inclui dias sem estudo e,
 no período atual, considera os dias transcorridos até hoje. Os dois temas usam
 as mesmas regras e cores de tipos. O esquema v2, os dados e o ícone permanecem
-preservados. A ampliação da CI pertence ao bloco 4, aguardando o commit desta
-etapa. Veja [arquitetura](docs/architecture.md) e [validação](docs/testing.md).
+preservados. Veja [arquitetura](docs/architecture.md) e [validação](docs/testing.md).
+
+**Bloco 4 — regressões e CI:** a validação é dividida em regras/persistência,
+Tk real em Claro/Escuro e pacote Windows. Sequências determinísticas verificam
+as invariantes após cada ação; o pacote é aberto com perfis sintéticos novos,
+v1 e v2, e os fluxos externos usam mouse/teclado na janela do executável.
+Os gates verificam coleta completa e rejeitam testes pulados nas etapas
+obrigatórias. Resultados desta execução e limites de aceite estão no
+[relatório](docs/acceptance_report.md); execução remota, proteção da branch,
+Windows limpo e transições físicas de energia exigem suas próprias evidências.
+Não há mudança de esquema, dependências, telas ou ícone neste bloco.
 
 ## Estrutura
 
@@ -116,9 +125,11 @@ Study-Timer/
 │   ├── StudyTimer.spec           # Fonte única do build onedir
 │   ├── check_bundle.py           # Bloqueio de dados privados no pacote
 │   ├── lock_dependencies.py      # Geração dos hashes das wheels
+│   ├── ci_checks.py              # Pré-condições, matrizes JUnit e artefatos públicos
+│   ├── windows_acceptance.ps1     # Matriz pendente e validação de registros do operador
 │   └── build.ps1                 # Qualidade, build, smoke, ZIP e SHA-256
 ├── tests/                        # Testes de serviços, persistência, UI e build
-└── .github/workflows/ci.yml       # Qualidade em Windows/Python 3.12
+└── .github/workflows/ci.yml       # Regras, Tk Claro/Escuro e pacote Windows
 ```
 
 ## Desenvolvimento
@@ -166,7 +177,8 @@ Com a venv Python 3.12 x64 criada, execute no Windows:
 ```
 
 O script usa exclusivamente [StudyTimer.spec](packaging/StudyTimer.spec), inclui
-os recursos do CustomTkinter, roda o teste de abertura e compacta a pasta inteira
+os recursos do CustomTkinter, roda qualidade, Tk real e abertura do executável,
+e compacta a pasta inteira
 `dist/StudyTimer/`. Gera `StudyTimer-Windows-v0.1.0.zip` e o arquivo `.sha256`.
 O ícone atual é provisório. O build e o smoke locais foram aprovados; o aceite
 em Windows limpo continua pendente.
@@ -174,6 +186,29 @@ O build cria um ambiente novo em `C:\StudyTimerBuild\<id>`, copia apenas fontes 
 recursos e bloqueia arquivos pessoais antes de gerar a saída final. A pasta deve
 ser gravável; `-BuildRoot` permite informar outro diretório neutro fora do perfil.
 O executável intermediário fica nessa pasta; a saída final contém ZIP e SHA-256.
+
+A entrega local do bloco 4 está em `dist/bloco4/StudyTimer/StudyTimer.exe`,
+acompanhada da pasta completa, e em `dist/StudyTimer-Windows-v0.1.0-bloco4.zip`.
+Preserve `_internal` ao lado do executável; para transportar, extraia o ZIP
+inteiro. Essa cópia passou na verificação de privacidade e nos seis smoke do
+artefato original. Os quatro fluxos externos corrigidos continuam pendentes
+por rejeição da nova execução; confira o estado e o hash no
+[relatório de aceite](docs/acceptance_report.md#executável-entregue-a-pedido-do-usuário).
+
+Para incluir os fluxos externos de mouse/teclado, use um desktop Windows
+interativo, desbloqueado e com espaço para cliente lógico 900×600 mais a moldura:
+
+```powershell
+.\packaging\build.ps1 -DesktopTests -TestResultsDir reports/raw/package
+```
+
+A CI organiza os jobs `quality`, `native` (Claro/Escuro) e `package`. O job do
+pacote precisa desse desktop interativo; a variável do repositório
+`STUDYTIMER_DESKTOP_RUNNER` permite escolher o rótulo de um runner dedicado.
+Os opt-ins, comandos de reprodução e regras de evidência estão em
+[testes](docs/testing.md). Somente JUnit sanitizado, metadados permitidos e
+capturas da própria janela com dados sintéticos são preparados para publicação;
+bancos e diagnósticos brutos ficam fora desses artefatos.
 
 ## Instalação e suporte da futura distribuição
 
@@ -187,7 +222,8 @@ Confira a procedência do pacote e compare o SHA-256 com o publicado pelo projet
 Get-FileHash .\StudyTimer-Windows-v0.1.0.zip -Algorithm SHA256
 ```
 
-SHA-256 do pacote local gerado em 30/10/2026 (atualizar a cada novo build):
+SHA-256 histórico do pacote local gerado em 30/10/2026; o pacote do bloco 4
+deve usar seu próprio `.sha256`, registrado no relatório de aceite:
 
 ```text
 56ecefdf206d02075cde68ab5fb044604606abcf2b2fdd4868b074ba9169a455

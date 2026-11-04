@@ -15,9 +15,13 @@ apenas com docstring não representam testes executados nem requisitos aprovados
 | `test_timer.py` | CT-02/03, parte de CT-04/09/12/13/15/18 | Ciclo de sessão sem interface e rollback real |
 | `test_reports.py` | CT-05/06/07/14/25 | Fronteiras, fusos, DST, snapshots e 1.000 sessões |
 | `test_history.py` | CT-05/07/14/17/25 | Calendário, cartões independentes, detalhes e atualização ao vivo |
-| `test_native_ui.py` | Aceite local do MVP | Quatro cenários opt-in com Tk real, isolados por processo |
+| `test_native_ui.py` | Matriz de cenários em Claro/Escuro | Tk real opt-in, com processos e perfis isolados |
 | `test_recovery.py` | Parte de CT-04/08/18/19 | Heartbeat, falhas SQLite e recuperação em novo processo |
-| `test_build_smoke.py` | Conteúdo e abertura do onedir (parte CT-23) | Condicional ao build |
+| `test_session_sequences.py` | Sequências de estados e conservação de tempo | Modelo independente, relógio simulado e falhas reais de COMMIT |
+| `test_build_smoke.py` | Conteúdo, abertura, migração e recuperação do onedir | Perfis novos/v1/v2 e aparência persistida; exige build |
+| `test_packaged_ui.py` | Fluxos externos do executável | Mouse/teclado e reabertura no desktop interativo, em ambos os temas |
+| `test_ci_checks.py` | Gates e exportação de evidências | Rejeição de relatórios incompletos/skips e limites dos artefatos públicos |
+| `test_windows_acceptance.py` | Preparação e validação dos registros da VM | Matriz pendente e contratos de evidência sintética; sem transições reais |
 
 Executar com o ambiente Python 3.12 ativado:
 
@@ -28,9 +32,11 @@ python -m mypy
 python -m pytest
 ```
 
-O teste de build é pulado quando `STUDYTIMER_BUILD_DIR` não está definido.
-O script de build define essa variável após gerar o executável e testa a abertura
-por alguns segundos. Esse teste não comprova todas as interações da interface.
+Testes do pacote são pulados fora do ambiente exigido: o smoke requer
+`STUDYTIMER_BUILD_DIR`; Tk real e fluxos externos têm opt-ins próprios.
+Essa conveniência da execução local não se aplica aos gates da CI: as etapas
+obrigatórias verificam pré-condições e rejeitam relatórios vazios, skips ou
+matrizes incompletas. O bloco 4, ao final deste documento, descreve o fluxo atual.
 
 Antes da entrega do MVP, executar CT-01 a CT-27 e registrar ambiente, resultado e
 evidência. Incluir: viradas de dia/semana/mês, DST, relógio para frente/trás,
@@ -460,4 +466,129 @@ Windows exigiu repetir a formatação. Não há falhas pendentes na validação 
 Somente dados sintéticos e bancos temporários foram utilizados. Não houve nova
 migração, build, certificação em Windows limpo, transição física de energia ou
 automação externa de mouse. A escala simulada não comprova transições reais de
-DPI entre monitores. A configuração de CI e o bloco 4 aguardam commit do usuário.
+DPI entre monitores. Na conclusão do bloco 3, a ampliação da CI aguardava o
+commit do usuário; o bloco 4 abaixo descreve sua implementação posterior.
+
+## Bloco 4 — regressões, interface e pacote na CI
+
+O fluxo atual usa Windows e Python 3.12 x64 com Tcl/Tk e os locks existentes.
+Não acrescenta dependências, muda o esquema v2 ou altera o ícone. Resultados,
+comandos efetivamente executados e limitações desta rodada são registrados em
+[acceptance_report.md](acceptance_report.md), sem converter coleta ou testes
+pulados em aceite. As seções anteriores preservam resultados históricos.
+
+A validação é dividida nos jobs:
+
+| Job | Responsabilidade | Evidência exigida |
+| --- | --- | --- |
+| `quality` | Dependências, Ruff, formatação, mypy, regras e SQLite temporário | JUnit sem falhas/skips e presença dos grupos críticos |
+| `native` | Cenários do manifesto em Claro e Escuro, cada um em processo Tk real | Matriz integral do tema do job, metadados e capturas sintéticas |
+| `package` | Único build onedir, verificação de privacidade, smoke e entrada externa no EXE | Matrizes obrigatórias, ZIP extraído verificado e SHA-256 |
+
+`tests/native_manifest.py` é compartilhado pela coleta e pela verificação da
+matriz Tk. Inclui os fluxos anteriores e a captura visual. Os fluxos de Tk
+podem inspecionar widgets e serviços para confirmar regras; os testes externos
+do executável usam entrada Win32 pela janela do PID de teste, sem chamar
+callbacks do aplicativo. Reaberturas usam o mesmo perfil sintético daquele caso.
+
+`test_session_sequences.py` usa sementes fixas e ações válidas/inválidas para
+comparar sessão, intervalos e relatório a um modelo independente após cada passo.
+A soma em nanossegundos só trunca nas fronteiras do contrato. Pausar, finalizar
+e heartbeat também são testados com COMMIT negado pelo SQLite e nova tentativa
+após uma espera simulada: os segundos posteriores ao congelamento não entram.
+`test_windows_power.py` amplia as regressões com tipo, aparência, tela e estado
+da sessão; são mensagens/fontes simuladas, sem suspender ou hibernar o host.
+
+O smoke inicia o EXE com `LOCALAPPDATA` temporário e espera `APPLICATION_READY`
+daquela execução, rejeitando `STARTUP_FAILED`. A matriz cruza origem nova/v1/v2
+com Claro/Escuro e reabre cada perfil. Verifica migração, backup anterior em v1,
+sessões/intervalos preservados, tipo em v2, recuperação pausada no checkpoint,
+preferência persistida e integridade após fechar pela janela. Não usa o banco
+pessoal. A fixture v1 é congelada em `tests/fixtures/schema_v1.sql`.
+
+Para reproduzir as regras e validar seu relatório:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m ruff format --check .
+.\.venv\Scripts\python.exe -m mypy
+.\.venv\Scripts\python.exe packaging/ci_checks.py preflight --kind quality --output reports/raw/quality/preflight.json
+.\.venv\Scripts\python.exe -m pytest -m "not build and not native_ui" --basetemp .pytest_cache/block4-quality --junitxml reports/raw/quality/tests.xml
+.\.venv\Scripts\python.exe packaging/ci_checks.py verify reports/raw/quality/tests.xml --group quality
+```
+
+Para a matriz Tk completa nos dois temas:
+
+```powershell
+$env:STUDYTIMER_NATIVE_UI = '1'
+$env:STUDYTIMER_EVIDENCE_DIR = 'reports/raw/native'
+.\.venv\Scripts\python.exe packaging/ci_checks.py preflight --kind native --output reports/raw/native/preflight.json
+.\.venv\Scripts\python.exe -m pytest -m "native_ui and not build" --basetemp .pytest_cache/block4-native --junitxml reports/raw/native/tests.xml
+.\.venv\Scripts\python.exe packaging/ci_checks.py verify reports/raw/native/tests.xml --group native
+Remove-Item Env:STUDYTIMER_NATIVE_UI
+Remove-Item Env:STUDYTIMER_EVIDENCE_DIR
+```
+
+Na matriz da CI, cada job seleciona um tema e verifica o JUnit com `--mode light`
+ou `--mode dark`. Para build, smoke e fluxos externos completos, use a
+orquestração existente:
+
+```powershell
+.\packaging\build.ps1 -DesktopTests -TestResultsDir reports/raw/package
+```
+
+O script configura `STUDYTIMER_BUILD_DIR`, `STUDYTIMER_NATIVE_UI=1` e, com
+`-DesktopTests`, `STUDYTIMER_DESKTOP_E2E=1`; restaura o ambiente ao terminar.
+Sem essa opção, o build mantém os testes de Tk e smoke, mas não representa o
+aceite dos fluxos de mouse/teclado. `--group smoke` e `--group build` verificam
+as matrizes correspondentes. As esperas reais servem à prontidão de processos
+e janelas; provas exatas de duração continuam usando relógios simulados.
+
+O executor de desktop deve manter sessão Windows interativa e desbloqueada,
+espaço para cliente lógico 900×600 mais a moldura (considerando DPI) e permissão
+de entrada no próprio processo de teste.
+Evite interação humana concorrente durante os fluxos externos. A variável do
+repositório `STUDYTIMER_DESKTOP_RUNNER` pode indicar o rótulo de um runner
+dedicado com essas condições. Uma sessão de serviço ou bloqueada deve falhar
+no preflight ou no teste de entrada, sem transformar a falta de desktop em skip
+bem sucedido. O preflight verifica o desktop de entrada disponível; somente a
+execução efetiva comprova a permissão de enviar teclado/mouse.
+PRs de forks usam o runner hospedado mesmo quando essa variável está definida;
+o desktop dedicado é reservado ao código do próprio repositório. Mantenha esse
+runner atualizado para executar as actions fixadas que usam Node 24.
+
+Evidências brutas ficam em `reports/raw/`, ignoradas pelo Git. Prepare a cópia
+pública antes de anexar artefatos:
+
+```powershell
+.\.venv\Scripts\python.exe packaging/ci_checks.py export reports/raw reports/public
+```
+
+A exportação permite somente JUnit sanitizado, metadados conhecidos e PNG da
+janela própria com dados sintéticos. Mensagens/tracebacks, stdout/stderr e
+propriedades brutas do JUnit não entram nessa cópia; bancos, sidecars, backups,
+logs e diretórios temporários não são artefatos públicos. A CI publica somente
+a saída preparada, além do pacote validado e seu hash, sem compactar a workspace.
+
+Ainda exigem evidência independente: execução remota dos jobs, configuração dos
+checks obrigatórios na proteção da branch, Windows limpo sem Python e offline,
+suspensão/hibernação físicas e matriz real de DPI/hardware. Automação de entrada
+na máquina de desenvolvimento não comprova instalação limpa nem todos os casos
+possíveis de uso. Consulte os roteiros de
+[distribuição](distribution_acceptance.md) e [energia](manual_power_test.md).
+
+### Checks obrigatórios no repositório remoto
+
+Depois de publicar o commit e obter uma execução real, configure a proteção
+da branch principal para exigir `quality`, `native (light)`, `native (dark)` e
+`package`, com os nomes que aparecerem na execução. Cancelar execuções antigas
+não dispensa esses quatro resultados do commit atual. O YAML local não altera
+essa configuração remota.
+
+Em uma branch de ensaio, introduza uma asserção deliberadamente falsa em um
+teste de regras e abra um PR sem mesclá-lo: `quality` deve falhar e a proteção
+deve impedir a mesclagem. Reverta a falha e confirme os quatro checks aprovados
+no novo commit. Os testes de `test_ci_checks.py` provam localmente a rejeição
+de relatórios vazios, falhos, pulados e incompletos, mas não substituem essa
+prova da proteção remota. Registre URL/commit e resultado no relatório de aceite.

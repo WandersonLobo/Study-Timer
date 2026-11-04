@@ -1,18 +1,27 @@
-name: Qualidade
+name: Validação Windows
 
 on: [push, pull_request]
 
 permissions:
   contents: read
 
+concurrency:
+  group: validation-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: pwsh
+
 jobs:
   quality:
+    name: quality
     runs-on: windows-latest
-    defaults:
-      run:
-        shell: pwsh
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
@@ -29,4 +38,103 @@ jobs:
       - run: .\.venv\Scripts\python.exe -m ruff check .
       - run: .\.venv\Scripts\python.exe -m ruff format --check .
       - run: .\.venv\Scripts\python.exe -m mypy
-      - run: .\.venv\Scripts\python.exe -m pytest
+      - name: Ambiente e regras
+        run: |
+          .\.venv\Scripts\python.exe packaging/ci_checks.py preflight --kind quality --output reports/raw/quality/environment.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv\Scripts\python.exe -m pytest -m 'not native_ui and not build' --junitxml=reports/raw/quality/tests.xml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv\Scripts\python.exe packaging/ci_checks.py verify reports/raw/quality/tests.xml --group quality
+      - name: Preparar evidências públicas
+        if: always()
+        run: .\.venv\Scripts\python.exe packaging/ci_checks.py export reports/raw/quality reports/public/quality
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: quality
+          path: reports/public/quality/
+          retention-days: 7
+          if-no-files-found: warn
+
+  native:
+    name: native (${{ matrix.mode }})
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [light, dark]
+    env:
+      STUDYTIMER_NATIVE_UI: '1'
+      STUDYTIMER_EVIDENCE_DIR: reports/raw/native/windows
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+          cache: pip
+      - run: python -m venv .venv
+      - run: >-
+          .\.venv\Scripts\python.exe -m pip --isolated install
+          --index-url https://pypi.org/simple --require-hashes --only-binary=:all:
+          -r requirements-dev.txt
+      - name: Tk real e matriz obrigatória
+        run: |
+          .\.venv\Scripts\python.exe packaging/ci_checks.py preflight --kind native --output reports/raw/native/environment.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv\Scripts\python.exe -m pytest -m 'native_ui and not build' -k '${{ matrix.mode }}' --junitxml=reports/raw/native/tests.xml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv\Scripts\python.exe packaging/ci_checks.py verify reports/raw/native/tests.xml --group native --mode '${{ matrix.mode }}'
+      - name: Preparar evidências públicas
+        if: always()
+        run: .\.venv\Scripts\python.exe packaging/ci_checks.py export reports/raw/native reports/public/native
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: native-${{ matrix.mode }}
+          path: reports/public/native/
+          retention-days: 7
+          if-no-files-found: warn
+
+  package:
+    name: package
+    needs: [quality, native]
+    # PRs de forks continuam em runner hospedado, sem acesso ao desktop dedicado.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.STUDYTIMER_DESKTOP_RUNNER || 'windows-latest' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - run: python -m venv .venv
+      - run: >-
+          .\.venv\Scripts\python.exe -m pip --isolated install
+          --index-url https://pypi.org/simple --require-hashes --only-binary=:all:
+          -r requirements-dev.txt
+      - name: Build oficial e entrada externa
+        run: .\packaging\build.ps1 -DesktopTests -TestResultsDir reports/raw/package
+      - name: Preparar evidências públicas
+        if: always()
+        run: .\.venv\Scripts\python.exe packaging/ci_checks.py export reports/raw/package reports/public/package
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: package-tests
+          path: reports/public/package/
+          retention-days: 7
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: StudyTimer-Windows-x64
+          path: |
+            dist/StudyTimer-Windows-v*.zip
+            dist/StudyTimer-Windows-v*.zip.sha256
+          retention-days: 7
+          if-no-files-found: error

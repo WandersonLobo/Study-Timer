@@ -780,8 +780,14 @@ validação e backup são abertas e fechadas nos próprios módulos de infraestr
   aparência Claro/Escuro persistida, teclado e remoção das instruções permanentes.
 - **Bloco 3 implementado:** modelos e resultado único por período, tipos sem
   perda do histórico arquivado, faixas locais históricas e navegação com retorno.
-  A ampliação da CI aguarda o bloco 4 e o commit do usuário. O esquema v2,
-  dependências, ícone e regras do cronômetro foram preservados.
+  O esquema v2, dependências, ícone e regras do cronômetro foram preservados.
+- **Bloco 4:** regressões de sequências/energia, matriz Tk Claro/Escuro e fluxos
+  externos do executável integram os jobs de regras, interface e pacote.
+  `ci_checks.py` verifica o ambiente, ausência de skips e matrizes JUnit;
+  prepara evidências públicas limitadas a relatórios sanitizados, metadados
+  permitidos e PNG da janela de teste. Não acrescenta classes de domínio nem
+  muda os relacionamentos acima. Resultados e pendências constam no relatório
+  de aceite, incluindo CI remota e proteção da branch ainda sem comprovação.
 - **Aceite local:** inclui cenários de Tk real isolados por processo; ver
   [resultados e limites](acceptance_report.md).
 - **Integração Windows implementada:** WindowsPowerMonitor trata suspensão e

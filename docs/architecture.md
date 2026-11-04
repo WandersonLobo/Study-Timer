@@ -42,8 +42,9 @@ e os serviços: esquema v2, migração v1 → v2, catálogo de tipos e preferên
 aparência. `Session.study_type_id` é opcional, com padrão None. O bloco 2 injeta
 os serviços de tipos/preferências na janela, expõe o catálogo no Cronômetro e
 aplica Claro/Escuro com preferência salva. O bloco 3 implementa o Histórico por
-Dia, Semana e Mês com tipos, gráficos e detalhamento. A ampliação da CI continua
-reservada ao bloco 4, aguardando o commit desta etapa.
+Dia, Semana e Mês com tipos, gráficos e detalhamento. O bloco 4 acrescenta
+regressões de sequências e energia, matriz Tk Claro/Escuro e validação do
+executável no fluxo de CI, sem alterar os serviços, o esquema ou o ícone.
 
 ## Decisões preservadas da especificação
 
@@ -571,6 +572,40 @@ Triggers verificam mudanças de status. A transação do repositório verifica t
 o estado final: running exige um intervalo aberto; paused/finished exigem zero.
 Adicionar comandos de escrita e consultas à classe de repositório conforme cada
 regra for implementada. A conexão não deve escapar para a camada visual.
+
+## Validação e distribuição — bloco 4
+
+A infraestrutura de validação fica fora das camadas de execução. A CI separa
+regras e persistência (`quality`), Tk real em cada aparência (`native`) e pacote
+Windows (`package`). `packaging/build.ps1` continua sendo a única orquestração
+do build onedir de `StudyTimer.spec`; `-DesktopTests` acrescenta os fluxos externos
+de mouse/teclado no executável já gerado, sem criar outra entrada de produção.
+
+`packaging/ci_checks.py` verifica Windows/Python 3.12 x64, Tcl/Tk e, na etapa
+externa, desktop interativo disponível. Depois da execução, valida os relatórios
+JUnit: exige casos, ausência de falhas/skips e a matriz de cenários/temas esperada.
+Uma execução local sem opt-in pode pular testes dependentes do ambiente; esse
+resultado não satisfaz os gates obrigatórios da CI.
+
+As sequências de sessão usam um modelo independente, relógio injetado e SQLite
+temporário real para verificar status, intervalos e conservação dos segundos após
+cada ação. Falhas reais de COMMIT verificam repetição no mesmo corte congelado.
+Regressões de energia combinam tipo, aparência e tela sem suspender o computador.
+O smoke do EXE cobre perfis novos, migração v1 e banco v2 com sessões sintéticas,
+recuperação pausada, preferência e preservação dos registros em outra abertura.
+
+Os fluxos externos endereçam somente janelas do PID do executável de teste;
+não chamam callbacks de `Application` nem substituem serviços do programa.
+Cada processo recebe um `LOCALAPPDATA` temporário. Capturas usam somente sua
+janela e dados sintéticos. A exportação de evidências separa o diretório bruto
+do público, removendo detalhes de erro e publicando apenas os formatos permitidos.
+Esses testes não hibernam o host nem comprovam Windows limpo sem Python.
+
+Resultados e limitações desta execução estão em
+[acceptance_report.md](acceptance_report.md). Executar os jobs remotamente e
+configurá-los como obrigatórios na proteção da branch são etapas externas ao
+código. A instalação limpa, energia física e DPI/hardware continuam exigindo
+aceite independente.
 
 ## Próximas etapas
 

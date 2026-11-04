@@ -1,14 +1,17 @@
 """Aceite repetível com widgets Tk reais e banco temporário; sem suspensão física."""
 
+import ctypes
+import os
 import socket
 import sqlite3
+import subprocess
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, date
 from pathlib import Path
 from time import perf_counter
-from tkinter import Misc
+from tkinter import BooleanVar, Misc
 from unittest.mock import Mock
 
 import pytest
@@ -51,12 +54,79 @@ def native_app(
     app.withdraw()
     try:
         yield app, timer, repository, source, connection
+    except BaseException:
+        if not app._closed:
+            try:
+                capture_evidence(app, "failure")
+            except Exception:
+                pass  # Uma falha de captura não esconde a falha original.
+        raise
     finally:
         if not app._closed:
             connection.set_authorizer(None)
             connection.execute("PRAGMA query_only = OFF")
             app.on_close()
         connection.close()
+
+
+def capture_evidence(app: Application, phase: str) -> None:
+    """Captura somente a janela sintética, processando WM_PRINT no processo Tk."""
+    directory = os.environ.get("STUDYTIMER_EVIDENCE_DIR")
+    if not directory:
+        return
+    app.deiconify()
+    app.update_idletasks()
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.GetAncestor.argtypes = (ctypes.c_void_p, ctypes.c_uint)
+    user.GetAncestor.restype = ctypes.c_void_p
+    hwnd = int(user.GetAncestor(app.winfo_id(), 2))
+    output = Path(directory) / f"{sys.argv[1]}-{app._appearance.value}-{phase}.png"
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "tests.capture_native_window",
+            str(os.getpid()),
+            str(hwnd),
+            str(output),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = perf_counter() + 20
+    done = BooleanVar(master=app, value=False)
+    job: str | None = None
+
+    def check_capture() -> None:
+        nonlocal job
+        job = None
+        if child.poll() is not None or perf_counter() >= deadline:
+            done.set(True)
+        else:
+            job = app.after(10, check_capture)
+
+    try:
+        job = app.after(10, check_capture)
+        # update() tenta esvaziar toda a fila e pode nunca retornar quando
+        # renderizações alimentam novos timers. vwait termina por condição.
+        app.wait_variable(done)
+        if child.poll() is None:
+            raise RuntimeError("Prazo de captura da janela excedido.")
+        if child.returncode != 0:
+            raise RuntimeError("Não foi possível capturar a janela de teste.")
+    finally:
+        if job is not None:
+            app.after_cancel(job)
+        if child.poll() is None:
+            subprocess.run(
+                ["taskkill", "/PID", str(child.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                check=False,
+            )
+            child.kill()
+        child.wait(timeout=5)
 
 
 def step(app: Application, source: FakeClock, seconds: int) -> None:
@@ -519,7 +589,9 @@ def test_native_period_history(
     background = canvas.cget("background")
     app.on_appearance("Claro" if app._appearance == AppearanceMode.DARK else "Escuro")
     app.update()
-    assert view.report is before and view.chart.selected_index == index
+    # app.update também entrega o refresh periódico: igualdade de valor,
+    # não identidade do objeto, é o contrato do relatório preservado.
+    assert view.report == before and view.chart.selected_index == index
     assert canvas.cget("background") != background
     assert ctk.get_appearance_mode().lower() == app._appearance.value
     # Somente a preferência mudou; relatórios e navegação não escrevem estudo.
@@ -537,6 +609,50 @@ def test_native_period_history(
     app.on_close()
 
 
+def test_native_visual_evidence(
+    native_app: tuple[Application, TimerService, StudyRepository, FakeClock, sqlite3.Connection],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.models.clock_snapshot import ClockSnapshot
+    from app.models.report_period import ReportPeriod
+    from app.models.study_color import StudyColor
+
+    app, _, repository, _, _ = native_app
+    # Este cenário captura estados estáticos; ciclos e atualização ao vivo
+    # são exercitados pelos outros cenários. Evita redesenhos periódicos
+    # concorrentes com WM_PRINT, mantendo os snapshots sintéticos estáveis.
+    for attribute in ("_tick_job", "_heartbeat_job"):
+        pending = getattr(app, attribute)
+        if pending is not None:
+            app.after_cancel(pending)
+            setattr(app, attribute, None)
+    study_type = app._types.create_type("POO", StudyColor.BLUE)
+    for day, hour, seconds in ((8, 10, 1800), (9, 15, 2700), (10, 9, 3600)):
+        start = stamp(2024, 5, day, hour)
+        session, interval = repository.start_session("Exercícios de classes", start, study_type.id)
+        repository.finish_session(
+            session.id, ClockSnapshot(interval.id, start, seconds, start + seconds)
+        )
+    app.deiconify()
+    app.geometry("1180x740")
+    app.update_idletasks()
+    assert_visible(app, app._timer_view.elapsed_label)
+    capture_evidence(app, "timer")
+    app.show_view("history")
+    view = app._history_view
+    for period in ReportPeriod:
+        view.period_buttons[period].invoke()
+        app.update_idletasks()
+        assert view.report is not None and view.report.total_s > 0
+        assert_visible(app, view.period_label)
+        canvas = view.chart.canvas
+        assert canvas.winfo_rootx() >= app.winfo_rootx()
+        assert canvas.winfo_rootx() + canvas.winfo_width() <= app.winfo_rootx() + app.winfo_width()
+        capture_evidence(app, period.value)
+    app.on_close()
+
+
 if __name__ == "__main__":
     scenarios = {
         "cycle": test_native_full_cycle_and_minimum_window,
@@ -548,6 +664,7 @@ if __name__ == "__main__":
         "dialog_errors": test_native_dialog_failures,
         "scaling": test_native_scaled_layout,
         "period_history": test_native_period_history,
+        "visual": test_native_visual_evidence,
     }
     with pytest.MonkeyPatch.context() as patch:
         mode = AppearanceMode(sys.argv[3]) if len(sys.argv) > 3 else AppearanceMode.DARK

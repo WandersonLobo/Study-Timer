@@ -13,6 +13,7 @@ addopts = "-ra --strict-markers"
 markers = [
     "build: validação do pacote Windows gerado pelo PyInstaller",
     "native_ui: aceite opt-in com Tcl/Tk real no Windows",
+    "desktop_ui: fluxo externo do executável em desktop interativo",
 ]
 
 [tool.ruff]
@@ -25,7 +26,7 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
 python_version = "3.12"
-files = ["main.py", "app", "tests", "packaging/check_bundle.py", "packaging/lock_dependencies.py"]
+files = ["main.py", "app", "tests", "packaging/check_bundle.py", "packaging/lock_dependencies.py", "packaging/ci_checks.py"]
 strict = true
 
 [[tool.mypy.overrides]]
