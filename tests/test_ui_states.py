@@ -14,7 +14,9 @@ import pytest
 from app.database.repository import StudyRepository
 from app.models import SessionStatus
 from app.services.clock_service import ClockService
+from app.services.preferences_service import PreferencesService
 from app.services.report_service import ReportService
+from app.services.study_type_service import StudyTypeService
 from app.services.timer_service import TimerService
 from app.windows_power import WindowsPowerMonitor
 from tests.test_clock import SECOND_NS, FakeClock
@@ -27,6 +29,8 @@ class Widget:
 
     def __init__(self, *args: object, **kwargs: Any) -> None:
         self.options = kwargs
+        self._canvas = self
+        self.bindings: dict[str, Callable[..., object]] = {}
         self.value = ""
         self.jobs: dict[str, tuple[int, Callable[[], None]]] = {}
         self.destroyed = False
@@ -51,6 +55,17 @@ class Widget:
 
     def winfo_id(self) -> int:
         return 0
+
+    def set(self, value: str) -> None:
+        self.value = value
+
+    def cget(self, key: str) -> Any:
+        return self.options.get(key)
+
+    def bind(self, sequence: str, callback: Callable[..., object], **kwargs: object) -> None:
+        self.bindings[sequence] = callback
+
+    focus_set = grid
 
     def get(self) -> str:
         return self.value
@@ -86,8 +101,18 @@ class Widget:
 def ui_modules(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[ModuleType, Mock]]:
     monkeypatch.setattr(WindowsPowerMonitor, "start", lambda self, hwnd: None)
     ctk = ModuleType("customtkinter")
-    for name in ("CTk", "CTkFrame", "CTkScrollableFrame", "CTkLabel", "CTkButton", "CTkEntry"):
+    for name in (
+        "CTk",
+        "CTkFrame",
+        "CTkScrollableFrame",
+        "CTkLabel",
+        "CTkButton",
+        "CTkEntry",
+        "CTkOptionMenu",
+        "CTkToplevel",
+    ):
         ctk.__dict__[name] = Widget
+    ctk.__dict__["set_appearance_mode"] = Mock()
     dialogs = Mock()
     dialogs.askyesnocancel.return_value = None
     tk = ModuleType("tkinter")
@@ -97,6 +122,8 @@ def ui_modules(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[ModuleType, Mo
     root = Path(__file__).resolve().parent.parent
     modules = []
     for name, relative in (
+        ("app.ui.theme", "app/ui/theme.py"),
+        ("app.ui.study_type_dialog", "app/ui/study_type_dialog.py"),
         ("app.ui.timer_view", "app/ui/timer_view.py"),
         ("app.ui.history_view", "app/ui/history_view.py"),
         ("app.application", "app/application.py"),
@@ -106,6 +133,10 @@ def ui_modules(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[ModuleType, Mo
         module = importlib.util.module_from_spec(spec)
         monkeypatch.setitem(sys.modules, name, module)
         spec.loader.exec_module(module)
+        if name == "app.ui.theme":
+            import app.ui
+
+            monkeypatch.setattr(app.ui, "theme", module, raising=False)
         modules.append(module)
     yield modules[-1], dialogs
 
@@ -118,7 +149,12 @@ def setup_ui(
     source = FakeClock()
     repository = StudyRepository(connection)
     timer = TimerService(repository, ClockService(source))
-    app = module.Application(timer, ReportService(repository))
+    app = module.Application(
+        timer,
+        ReportService(repository),
+        StudyTypeService(repository),
+        PreferencesService(repository),
+    )
     return app, timer, repository, source, dialogs
 
 
@@ -226,7 +262,12 @@ def test_recovery_dialog_requires_an_explicit_choice(
     timer = TimerService(repository, ClockService(source))
     timer.recover_pending()
     dialogs.askyesnocancel.return_value = choice
-    app = module.Application(timer, ReportService(repository))
+    app = module.Application(
+        timer,
+        ReportService(repository),
+        StudyTypeService(repository),
+        PreferencesService(repository),
+    )
     assert "recuperada" in app._timer_view.status_label.options["text"]
     assert not timer.is_running and source.read_count == 0
     app.fire(0)
@@ -332,7 +373,12 @@ def test_close_before_recovery_dialog_cancels_all_pending_callbacks(
     repository.start_session("Pendente", 1000)
     timer = TimerService(repository, ClockService(FakeClock()))
     timer.recover_pending()
-    app = module.Application(timer, ReportService(repository))
+    app = module.Application(
+        timer,
+        ReportService(repository),
+        StudyTypeService(repository),
+        PreferencesService(repository),
+    )
     app.on_close()
     assert app.destroyed and not app.jobs
     dialogs.askyesnocancel.assert_not_called()

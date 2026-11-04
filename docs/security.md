@@ -2,6 +2,7 @@
 
 Revisão inicial em 29/10/2026; persistência e recuperação atualizadas em 30/10/2026.
 Migração de esquema e serviços do bloco 1 atualizados em 03/11/2026.
+Interface de tipos e aparência do bloco 2 atualizada em 04/11/2026.
 O app continua local, sem login, sincronização ou exportação CSV. O cronômetro e
 o tratamento de falhas funcionam pelos serviços e pela tela Cronômetro.
 Erros em callbacks usam mensagens estáticas e logs sem detalhes privados.
@@ -11,6 +12,16 @@ fila da UI. Retomar o Windows não retoma a sessão. O callback não executa SQL
 não exibe diálogos e não deixa exceções atravessarem a fronteira nativa.
 
 ## Correções aplicadas
+
+- Bloco 2: diálogos de tipos chamam os serviços existentes, sem SQL na UI nem
+  alteração de durações. Tipo/descrição são bloqueados em uma sessão pendente.
+  Validação mostra mensagens do domínio sem nomes interpolados; falhas inesperadas
+  mostram texto estático e registram somente código/tipo. Uma falha de interface
+  após COMMIT é distinguida de falha de gravação para evitar duplicação na tentativa.
+- A preferência de aparência continua no banco local v2, sem arquivo de
+  configuração adicional ou serviço externo. Trocar o tema não limpa uma falha
+  de persistência da sessão nem reabre um intervalo. Não houve mudanças em
+  dependências, ícone, build ou CI neste bloco.
 
 - Git ignora bancos/sidecars SQLite, cópias de corrupção, backups, logs, CSVs,
   ambientes e pacotes. A inspeção dos nomes de arquivos em todos os commits

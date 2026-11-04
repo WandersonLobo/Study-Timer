@@ -11,7 +11,9 @@ import pytest
 
 from app.database.repository import StudyRepository
 from app.services.clock_service import ClockService
+from app.services.preferences_service import PreferencesService
 from app.services.report_service import ReportService
+from app.services.study_type_service import StudyTypeService
 from app.services.timer_service import TimerService
 from app.ui.history_view import intensity_color
 from tests import test_ui_states
@@ -34,7 +36,9 @@ def history_app(
     timer = TimerService(repository, ClockService(source))
     reports = ReportService(repository, lambda: UTC)
     monkeypatch.setattr(reports, "get_today", lambda: date(2024, 5, 10))
-    app = module.Application(timer, reports)
+    app = module.Application(
+        timer, reports, StudyTypeService(repository), PreferencesService(repository)
+    )
     return app, timer, repository, source, dialogs
 
 

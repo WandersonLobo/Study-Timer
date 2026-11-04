@@ -12,7 +12,9 @@ from app.database.connection import initialize_database
 from app.database.repository import StudyRepository
 from app.logging_config import configure_logging, prepare_windowed_streams
 from app.models import ClockSnapshot, SessionStatus
+from app.services.preferences_service import PreferencesService
 from app.services.report_service import ReportService
+from app.services.study_type_service import StudyTypeService
 from app.services.timer_service import TimerService
 
 
@@ -78,7 +80,13 @@ def test_application_composition_recovers_before_creating_the_window(
     events: list[str] = []
 
     class StubApplication:
-        def __init__(self, timer: TimerService, reports: ReportService) -> None:
+        def __init__(
+            self,
+            timer: TimerService,
+            reports: ReportService,
+            types: StudyTypeService,
+            preferences: PreferencesService,
+        ) -> None:
             active = timer.get_active_session()
             assert active is not None and active.id == session.id
             assert active.status == SessionStatus.PAUSED

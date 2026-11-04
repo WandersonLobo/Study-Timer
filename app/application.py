@@ -9,10 +9,14 @@ from typing import Literal
 import customtkinter as ctk
 
 from app.config import HEARTBEAT_INTERVAL_S, MIN_WINDOW_SIZE, TICK_INTERVAL_MS, WINDOW_SIZE
-from app.models import PauseReason, Session, SessionStatus, UIState
+from app.models import AppearanceMode, PauseReason, Session, SessionStatus, UIState
+from app.services.preferences_service import PreferencesService
 from app.services.report_service import ReportService
+from app.services.study_type_service import StudyTypeService
 from app.services.timer_service import TimerService
+from app.ui import theme
 from app.ui.history_view import HistoryView
+from app.ui.study_type_dialog import StudyTypeDialog
 from app.ui.timer_view import TimerView
 from app.windows_power import WindowsPowerMonitor
 
@@ -20,8 +24,19 @@ from app.windows_power import WindowsPowerMonitor
 class Application(ctk.CTk):
     """Compõe somente Cronômetro e Histórico, sem acesso direto ao banco."""
 
-    def __init__(self, timer: TimerService, reports: ReportService) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        timer: TimerService,
+        reports: ReportService,
+        types: StudyTypeService,
+        preferences: PreferencesService,
+    ) -> None:
+        self._appearance = preferences.get_appearance_mode()
+        theme.apply_appearance(self._appearance)
+        super().__init__(fg_color=theme.BACKGROUND)
+        self._types = types
+        self._preferences = preferences
+        self._type_dialog: StudyTypeDialog | None = None
         self._timer = timer
         self._power = WindowsPowerMonitor(lambda: timer.freeze(PauseReason.SUSPEND))
         self._reports = reports
@@ -42,20 +57,49 @@ class Application(ctk.CTk):
         self.minsize(*MIN_WINDOW_SIZE)
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
-        sidebar = ctk.CTkFrame(self, width=180)
+        sidebar = ctk.CTkFrame(self, width=180, fg_color=theme.SIDEBAR)
         sidebar.grid(row=0, column=0, sticky="nsew", padx=(12, 0), pady=12)
-        ctk.CTkLabel(sidebar, text="StudyTimer", font=("Segoe UI", 24)).pack(padx=20, pady=32)
-        ctk.CTkButton(sidebar, text="Cronômetro", command=lambda: self.show_view("timer")).pack(
-            padx=16, pady=8
+        ctk.CTkLabel(
+            sidebar, text="StudyTimer", text_color=theme.TEXT, font=("Segoe UI", 24, "bold")
+        ).pack(padx=20, pady=32)
+        self._nav_buttons: dict[str, ctk.CTkButton] = {}
+        for name, label in (("timer", "Cronômetro"), ("history", "Histórico")):
+            button = ctk.CTkButton(
+                sidebar,
+                text=label,
+                command=lambda view=name: self.show_view(view),
+                hover_color=theme.SELECTION,
+            )
+            button.pack(padx=16, pady=8)
+            theme.keyboard_button(button)
+            self._nav_buttons[name] = button
+        self.theme_menu = ctk.CTkOptionMenu(
+            sidebar,
+            values=["Claro", "Escuro"],
+            command=self.on_appearance,
+            fg_color=theme.SURFACE,
+            text_color=theme.TEXT,
+            button_color=theme.PRIMARY,
+            dropdown_fg_color=theme.SURFACE,
+            dropdown_text_color=theme.TEXT,
+            dropdown_hover_color=theme.SELECTION,
         )
-        ctk.CTkButton(sidebar, text="Histórico", command=lambda: self.show_view("history")).pack(
-            padx=16, pady=8
-        )
-        content = ctk.CTkFrame(self)
+        theme.keyboard_choice(self.theme_menu, self.on_appearance)
+        self.theme_menu.set("Claro" if self._appearance == AppearanceMode.LIGHT else "Escuro")
+        self.theme_menu.pack(side="bottom", padx=12, pady=20)
+        content = ctk.CTkFrame(self, fg_color=theme.BACKGROUND)
         content.grid(row=0, column=1, sticky="nsew", padx=12, pady=12)
         content.grid_rowconfigure(0, weight=1)
         content.grid_columnconfigure(0, weight=1)
-        self._timer_view = TimerView(content, self.on_start, self.on_pause, self.on_finish)
+        self._timer_view = TimerView(
+            content,
+            self.on_start,
+            self.on_pause,
+            self.on_finish,
+            self.on_create_type,
+            self.on_manage_types,
+        )
+        self._reload_types()
         self._history_view = HistoryView(content, self.on_month, self.on_day, self.on_today)
         self._views: dict[str, TimerView | HistoryView] = {
             "timer": self._timer_view,
@@ -78,6 +122,11 @@ class Application(ctk.CTk):
     def show_view(self, name: Literal["timer", "history"]) -> None:
         """Alterna a tela sem reconstruir os serviços ou os widgets."""
         self._visible_view = name
+        for view, button in self._nav_buttons.items():
+            button.configure(
+                fg_color=theme.SELECTION if view == name else "transparent",
+                text_color=theme.LINK if view == name else theme.TEXT,
+            )
         # CTkScrollableFrame encaminha lift ao contêiner externo; tkraise não.
         self._views[name].lift()
         if name == "history":
@@ -130,11 +179,80 @@ class Application(ctk.CTk):
 
         def command() -> None:
             if self._timer.get_active_session() is None:
-                self._timer.start_session(self._timer_view.get_name())
+                self._timer.start_session(
+                    self._timer_view.get_name(), self._timer_view.get_type_id()
+                )
             else:
                 self._timer.resume_session()
 
         self._run(command)
+
+    def _reload_types(self) -> None:
+        items = self._types.list_types(include_archived=True)
+        pending = self._timer.get_active_session()
+        self._timer_view.set_types(
+            [
+                item
+                for item in items
+                if not item.is_archived
+                or (pending is not None and pending.study_type_id == item.id)
+            ]
+        )
+
+    def _type_saved(self, type_id: int | None) -> None:
+        self._reload_types()
+        self._timer_view.select_type(type_id)
+
+    def on_create_type(self) -> None:
+        self._open_types(manage=False)
+
+    def on_manage_types(self) -> None:
+        self._open_types(manage=True)
+
+    def _open_types(self, *, manage: bool) -> None:
+        if self._closed:
+            return
+        try:
+            if self._timer.get_active_session() is not None:
+                return
+        except Exception as error:
+            self._handle_error(error)
+            return
+        if self._type_dialog is not None and self._type_dialog.winfo_exists():
+            self._type_dialog.lift()
+            self._type_dialog.focus_set()
+            return
+        try:
+            self._reload_types()
+            self._type_dialog = StudyTypeDialog(self, self._types, self._type_saved, manage=manage)
+        except Exception as error:
+            logging.getLogger("studytimer.ui").error(
+                "TYPE_DIALOG_FAILED type=%s", type(error).__name__
+            )
+            messagebox.showerror(
+                "Tipos de estudo",
+                "Não foi possível carregar os tipos. Tente novamente.",
+                parent=self,
+            )
+
+    def on_appearance(self, label: str) -> None:
+        if self._closed:
+            return
+        previous = self._appearance
+        try:
+            mode = {"Claro": AppearanceMode.LIGHT, "Escuro": AppearanceMode.DARK}[label]
+            self._preferences.set_appearance_mode(mode)
+        except Exception as error:
+            self.theme_menu.set("Claro" if previous == AppearanceMode.LIGHT else "Escuro")
+            logging.getLogger("studytimer.ui").error(
+                "APPEARANCE_SAVE_FAILED type=%s", type(error).__name__
+            )
+            messagebox.showerror(
+                "Aparência", "Não foi possível salvar a aparência. Tente novamente.", parent=self
+            )
+            return
+        theme.apply_appearance(mode)
+        self._appearance = mode
 
     def on_pause(self) -> None:
         """Permite repetir a pausa usando o snapshot congelado após falha."""
@@ -256,6 +374,8 @@ class Application(ctk.CTk):
             self._handle_error(error)
             return
         self._closed = True
+        if self._type_dialog is not None and self._type_dialog.winfo_exists():
+            self._type_dialog.close()
         for job in (self._tick_job, self._heartbeat_job, self._recovery_job):
             if job is not None:
                 self.after_cancel(job)

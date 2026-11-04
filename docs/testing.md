@@ -337,3 +337,64 @@ Os quatro cenários Tk comprovam compatibilidade da interface atual com os novos
 serviços/esquema, não os controles planejados dos próximos blocos. Suspensão ou
 hibernação física, novo pacote em Windows limpo e os blocos 2 a 4 permanecem
 fora desta validação.
+
+## Bloco 2 — classificação no Cronômetro e temas
+
+Em 04/11/2026, Python 3.12.10 x64 com Tcl/Tk no Windows. O bloco 2 não modifica
+o banco, o relógio ou os relatórios; liga os serviços existentes à interface.
+`test_ui_classification.py` acrescenta nove casos (incluindo parametrização)
+com SQLite e relógio controlado: troca de aparência em idle/running/paused/
+recovered, preservação de campos, ids e jobs, rollback da preferência, manutenção
+de falha da sessão, seleção por id, finalização segura, recuperação e normalização
+da seleção após renomear/arquivar. Verifica também aplicação do modo antes da raiz.
+
+As fixtures de UI e bootstrap agora injetam os quatro serviços. Os cenários
+nativos executam sete fluxos em cada modo, totalizando 14 casos: ciclo,
+recuperação, offline/backup, 1.000 sessões, tipos/temas, falhas do diálogo e layout
+escalado. Tipos/temas reabre a aplicação em outro processo para conferir escolha
+persistida, descrição e classificação. O cadastro cobre cancelar, duplicidade,
+falha de COMMIT e nova tentativa, edição, arquivamento/reativação, teclado,
+troca de tema com diálogo aberto e durante contagem e bloqueio de edição.
+Falhas pós-COMMIT e na leitura do catálogo são testadas sem deixar janela órfã
+ou grab ativo, e sem expor o conteúdo privado de exceções.
+
+O layout é conferido na janela mínima de 900×600 e com escala de widgets/janela
+simulada pelo CustomTkinter em 100%, 125%, 150% e 200%, nos dois modos. Isso
+verifica geometria relativa dos controles, não uma mudança real de DPI entre
+monitores. Capturas locais sintéticas de Cronômetro, Histórico e diálogo foram
+inspecionadas em Claro/Escuro, em 1180×740 e 900×600. Os arquivos de diagnóstico
+permanecem na pasta ignorada `.pytest_cache/`, fora da distribuição.
+
+Validação final:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m ruff format --check .
+.\.venv\Scripts\python.exe -m mypy
+$env:STUDYTIMER_NATIVE_UI = '1'
+.\.venv\Scripts\python.exe -m pytest --basetemp .pytest_cache/block2-acceptance -q --tb=short
+Remove-Item Env:STUDYTIMER_NATIVE_UI
+git diff --check
+```
+
+Pip check, Ruff, formatação e mypy passaram. A suíte final, incluindo os cenários
+Tk, aprovou **309 testes e pulou um**, o smoke do executável por não haver novo
+build. A execução anterior sem opt-in aprovou 295 casos; os 14 casos Tk foram
+também verificados nos seus subprocessos. Nenhum teste usa o banco pessoal.
+
+As primeiras execuções exigiram adaptar as fixtures ao construtor e corrigir
+seu carregamento isolado da paleta. Na simulação de escala, o teste passou a
+mapear a janela antes de alterar a escala, evitando medir o tamanho provisório
+de criação de 200×200. As verificações finais não têm essas falhas.
+
+O ambiente exibiu aviso de fallback de CustomTkinter de font_shapes para
+circle_shapes; as capturas foram legíveis, mas não certificam a renderização
+das fontes em todas as instalações. O script local de captura foi executado
+como comando, pois a política do Windows impede scripts .ps1; nenhuma política
+ou proteção do sistema foi alterada.
+
+Não houve novo build, certificação em Windows limpo, entrada externa por mouse
+do sistema ou transição física de energia. Os testes nativos acionam widgets
+e eventos Tk reais, usam relógio simulado e substituem messageboxes. Os blocos
+3 e 4 aguardam o commit e não fazem parte desta entrega.

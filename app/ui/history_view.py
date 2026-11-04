@@ -7,6 +7,7 @@ from datetime import date
 import customtkinter as ctk
 
 from app.models import PeriodTotals, SessionSummary
+from app.ui import theme
 from app.ui.formatting import format_clock, format_minutes
 
 MONTH_NAMES = (
@@ -25,17 +26,17 @@ MONTH_NAMES = (
 )
 
 
-def intensity_color(seconds: int) -> str:
+def intensity_color(seconds: int) -> theme.Color:
     """Faixas fixas em segundos; não mudam de significado ao trocar de mês."""
     if seconds <= 0:
-        return "#3A3A3A"
+        return ("#E8EDF3", "#3A3A3A")
     if seconds < 15 * 60:
-        return "#315E79"
+        return ("#D9EAFB", "#315E79")
     if seconds < 60 * 60:
-        return "#226C9C"
+        return ("#BBD8F4", "#226C9C")
     if seconds < 120 * 60:
-        return "#175596"
-    return "#10366E"
+        return ("#93BDE6", "#175596")
+    return ("#69A1D5", "#10366E")
 
 
 class HistoryView(ctk.CTkScrollableFrame):
@@ -48,14 +49,14 @@ class HistoryView(ctk.CTkScrollableFrame):
         on_day: Callable[[date], None],
         on_today: Callable[[], None],
     ) -> None:
-        super().__init__(master)
+        super().__init__(master, fg_color=theme.SURFACE)
         self.grid_columnconfigure((0, 1, 2), weight=1)
         ctk.CTkLabel(self, text="Histórico", font=("Segoe UI", 28)).grid(
             row=0, column=0, columnspan=3, padx=24, pady=32
         )
         self.total_labels: list[ctk.CTkLabel] = []
         for column, label in enumerate(("Hoje", "Esta semana", "Mês atual")):
-            card = ctk.CTkFrame(self)
+            card = ctk.CTkFrame(self, fg_color=theme.SIDEBAR)
             card.grid(row=1, column=column, padx=8, pady=16, sticky="ew")
             ctk.CTkLabel(card, text=label).pack(padx=12, pady=(12, 4))
             total = ctk.CTkLabel(card, text="—", font=("Segoe UI", 24))
@@ -89,12 +90,6 @@ class HistoryView(ctk.CTkScrollableFrame):
             button = ctk.CTkButton(cells, text="", width=60, height=46, corner_radius=6)
             button.grid(row=slot // 7 + 1, column=slot % 7, padx=2, pady=2, sticky="ew")
             self.day_buttons.append(button)
-        ctk.CTkLabel(
-            self,
-            text="Intensidade: sem estudo · <15 min · <1 h · <2 h · ≥2 h\n"
-            "Contorno azul: hoje. Contorno dourado: dia selecionado.",
-            wraplength=560,
-        ).grid(row=5, column=0, columnspan=3, padx=12, pady=8)
         self.day_label = ctk.CTkLabel(self, text="", font=("Segoe UI", 18))
         self.day_label.grid(row=6, column=0, columnspan=3, pady=8)
         self._details = ctk.CTkFrame(self)
@@ -145,7 +140,9 @@ class HistoryView(ctk.CTkScrollableFrame):
             for slot, button in enumerate(self.day_buttons):
                 number = slot - first_weekday + 1
                 if not 1 <= number <= count:
-                    button.configure(text="", state="disabled", fg_color="#3A3A3A", border_width=0)
+                    button.configure(
+                        text="", state="disabled", fg_color=theme.DISABLED, border_width=0
+                    )
                     continue
                 day = date(year, month, number)
                 seconds = days[day]
@@ -153,7 +150,7 @@ class HistoryView(ctk.CTkScrollableFrame):
                     text=f"{number}\n{format_minutes(seconds)}",
                     state="normal",
                     fg_color=intensity_color(seconds),
-                    text_color="white",
+                    text_color=theme.TEXT,
                     border_width=2 if day in (selected, reference) else 0,
                     border_color="#E4B84B" if day == selected else "#4EB8E8",
                     command=lambda day=day: self._on_day(day),
@@ -168,7 +165,7 @@ class HistoryView(ctk.CTkScrollableFrame):
             self._session_data = tuple(sessions)
             self._render_sessions()
             self._details_key = details_key
-        self.status_label.configure(text="Atualização ao vivo · minutos truncados após a soma")
+        self.status_label.configure(text="")
 
     def _render_sessions(self) -> None:
         visible = self._session_data[: self._session_limit]

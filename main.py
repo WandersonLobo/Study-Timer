@@ -8,7 +8,9 @@ from app.database.health import DatabaseHealthError, DatabaseVersionError
 from app.database.repository import StudyRepository
 from app.logging_config import configure_logging, prepare_windowed_streams
 from app.services.clock_service import ClockService, SystemClock
+from app.services.preferences_service import PreferencesService
 from app.services.report_service import ReportService
+from app.services.study_type_service import StudyTypeService
 from app.services.timer_service import TimerService
 from app.single_instance import AlreadyRunningError, SingleInstance
 from app.ui.startup_dialog import show_startup_message
@@ -65,7 +67,9 @@ def run_application(paths: AppPaths) -> None:
         timer = TimerService(repository, clock)
         timer.recover_pending()
         reports = ReportService(repository)
-        application = Application(timer, reports)
+        application = Application(
+            timer, reports, StudyTypeService(repository), PreferencesService(repository)
+        )
         logging.getLogger("studytimer").info("APPLICATION_READY")
         application.mainloop()
     finally:

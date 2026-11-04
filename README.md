@@ -26,9 +26,15 @@ preferência de aparência, com migração explícita do banco v1. Os serviços 
 criar, renomear, recolorir, arquivar e reativar tipos, iniciar uma sessão com tipo
 opcional e persistir Claro/Escuro. Estudos anteriores permanecem sem tipo, com
 seus nomes, estados e segundos preservados. A preferência inicial é Escuro.
-Essas operações ainda não estão expostas na interface; telas, seletor de tema,
-gráficos por tipo e ampliação da CI pertencem aos blocos seguintes, aguardando
-o commit desta etapa. Consulte os contratos em [arquitetura](docs/architecture.md).
+**Bloco 2 — Cronômetro e temas:** o Cronômetro permite selecionar Sem tipo ou
+um tipo cadastrado, criar tipos e gerenciar nome, cor, arquivamento e reativação.
+Tipo e descrição ficam bloqueados até finalizar a sessão. Uma finalização salva
+limpa a descrição e mantém a seleção de tipo para o próximo estudo nesta abertura.
+O seletor Claro/Escuro na base da barra lateral salva e reaplica a aparência,
+inclusive após reabrir. As telas não exibem instruções permanentes; estados e
+avisos necessários permanecem. O Histórico mantém seu calendário e relatórios
+atuais, com contraste nos dois temas. Novos gráficos e ampliação da CI pertencem
+aos blocos 3 e 4, aguardando o commit desta etapa. Veja [arquitetura](docs/architecture.md).
 
 ## Estrutura
 
@@ -64,6 +70,8 @@ Study-Timer/
 │   ├── ui/
 │   │   ├── timer_view.py
 │   │   ├── history_view.py
+│   │   ├── theme.py               # Paleta e adaptação de teclado Claro/Escuro
+│   │   ├── study_type_dialog.py   # Cadastro e gerenciamento de tipos
 │   │   ├── formatting.py          # Formatação após agregação
 │   │   └── startup_dialog.py      # Erros sem caminhos privados
 │   ├── services/

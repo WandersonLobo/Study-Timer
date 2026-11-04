@@ -17,9 +17,11 @@ from app.application import Application
 from app.database.backup import create_backup, restore_backup
 from app.database.connection import initialize_database
 from app.database.repository import StudyRepository
-from app.models import SessionStatus
+from app.models import AppearanceMode, SessionStatus
 from app.services.clock_service import ClockService
+from app.services.preferences_service import PreferencesService
 from app.services.report_service import ReportService
+from app.services.study_type_service import StudyTypeService
 from app.services.timer_service import TimerService
 from tests.test_clock import SECOND_NS, FakeClock
 from tests.test_recovery import deny_commit
@@ -30,18 +32,22 @@ from tests.test_reports import add_interval, stamp
 def native_app(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    mode: AppearanceMode = AppearanceMode.DARK,
 ) -> Iterator[tuple[Application, TimerService, StudyRepository, FakeClock, sqlite3.Connection]]:
     from tkinter import messagebox
 
     for name in ("showerror", "showinfo", "askyesnocancel"):
         monkeypatch.setattr(messagebox, name, Mock(return_value=None))
+    existing = (tmp_path / "estudos.db").exists()
     connection = initialize_database(tmp_path / "estudos.db")
     repository = StudyRepository(connection)
+    if not existing:
+        PreferencesService(repository).set_appearance_mode(mode)
     source = FakeClock(wall_time_s=stamp(2024, 5, 10, 12) + 0.75)
     timer = TimerService(repository, ClockService(source))
     reports = ReportService(repository, lambda: UTC)
     monkeypatch.setattr(reports, "get_today", lambda: date(2024, 5, 10))
-    app = Application(timer, reports)
+    app = Application(timer, reports, StudyTypeService(repository), PreferencesService(repository))
     app.withdraw()
     try:
         yield app, timer, repository, source, connection
@@ -207,13 +213,228 @@ def test_native_history_thousand_sessions(
     app.on_close()
 
 
+def test_native_types_and_themes(
+    native_app: tuple[Application, TimerService, StudyRepository, FakeClock, sqlite3.Connection],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tkinter import messagebox
+
+    import customtkinter as ctk
+
+    app, timer, repository, source, connection = native_app
+    app.deiconify()
+    app.geometry("900x600")
+    app.update()
+    view = app._timer_view
+    view.name_entry.insert(0, "Descrição preservada")
+    app.on_create_type()
+    dialog = app._type_dialog
+    assert dialog is not None
+    app.update()
+    dialog.close()
+    assert view.get_name() == "Descrição preservada" and view.get_type_id() is None
+    assert not app._types.list_types() and app.grab_current() is None
+    app.on_create_type()
+    dialog = app._type_dialog
+    assert dialog is not None
+    app.update()
+    dialog.name_entry.insert(0, "POO")
+    connection.set_authorizer(deny_commit)
+    try:
+        dialog.save_button.invoke()
+    finally:
+        connection.set_authorizer(None)
+    assert dialog.winfo_exists() and app._types.list_types() == []
+    assert isinstance(messagebox.showerror, Mock)
+    messagebox.showerror.assert_called_once()
+    messagebox.showerror.reset_mock()
+    dialog.save_button.invoke()
+    assert not dialog.winfo_exists() and app.grab_current() is None
+    item = app._types.list_types()[0]
+    assert view.get_type_id() == item.id
+    app.on_create_type()
+    dialog = app._type_dialog
+    assert dialog is not None
+    app.update()
+    dialog.name_entry.insert(0, "poo")
+    dialog.save()
+    assert dialog.winfo_exists() and len(app._types.list_types()) == 1
+    assert isinstance(messagebox.showerror, Mock)
+    messagebox.showerror.assert_called_once()
+    dialog.close()
+    app.on_manage_types()
+    dialog = app._type_dialog
+    assert dialog is not None
+    app.update()
+    dialog.select_type(item.id)
+    dialog.name_entry.delete(0, "end")
+    dialog.name_entry.insert(0, "Objetos")
+    dialog.save()
+    assert view.type_menu.get() == "Objetos"
+    dialog.toggle_archived()
+    assert app._types.list_types() == [] and view.get_type_id() is None
+    dialog.toggle_archived()
+    assert view.get_type_id() == item.id
+    # Pares de cor atualizam inclusive o diálogo existente, sem reconstruí-lo.
+    current = app._appearance
+    label = "Claro" if current == AppearanceMode.DARK else "Escuro"
+    app.on_appearance(label)
+    app.update()
+    assert app._type_dialog is dialog and dialog.winfo_exists()
+    assert ctk.get_appearance_mode().lower() == app._appearance.value
+    dialog.close()
+    # O seletor pode ser operado pelo Canvas que recebe o foco via Tab.
+    view.type_menu._canvas.focus_force()
+    view.type_menu._canvas.event_generate("<Up>")
+    app.update()
+    assert view.get_type_id() is None
+    view.type_menu._canvas.event_generate("<Down>")
+    app.update()
+    assert view.get_type_id() == item.id
+    app.on_start()
+    step(app, source, 2)
+    session = timer.get_active_session()
+    assert session is not None and session.study_type_id == item.id
+    jobs = (app._tick_job, app._heartbeat_job)
+    app.on_appearance("Claro" if app._appearance == AppearanceMode.DARK else "Escuro")
+    assert timer.is_running and (app._tick_job, app._heartbeat_job) == jobs
+    assert view.get_name() == "Descrição preservada"
+    assert repository.get_session(session.id) == session
+    for widget in (view.new_type_button, view.manage_types_button):
+        assert widget.cget("state") == "disabled"
+    app.on_manage_types()
+    assert app._type_dialog is dialog  # Não abriu outro durante a sessão.
+    app.show_view("history")
+    app.show_view("timer")
+    app.update_idletasks()
+    for widget in (view.type_menu, view.name_entry, view.start_button, view.finish_button):
+        assert widget.winfo_rootx() >= app.winfo_rootx()
+        assert widget.winfo_rootx() + widget.winfo_width() <= app.winfo_rootx() + app.winfo_width()
+    app.on_pause()
+    source.advance(3600 * SECOND_NS)
+    app.on_start()
+    step(app, source, 1)
+    app.on_finish()
+    assert view.get_name() == "" and view.get_type_id() == item.id
+    assert repository.get_session_intervals(session.id)[-1].ended_at is not None
+    assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    view.name_entry.insert(0, "Retomar depois")
+    app.on_start()
+    step(app, source, 1)
+    app.on_close()
+
+
+def test_native_dialog_failures(
+    native_app: tuple[Application, TimerService, StudyRepository, FakeClock, sqlite3.Connection],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tkinter import messagebox
+
+    app, timer, _, _, _ = native_app
+    app.deiconify()
+    app.update()
+    app.on_create_type()
+    dialog = app._type_dialog
+    assert dialog is not None
+    app.update()
+    dialog.save()
+    assert dialog.winfo_exists() and not app._types.list_types()
+    dialog.name_entry.insert(0, "Tipo salvo")
+    monkeypatch.setattr(dialog, "_on_saved", Mock(side_effect=OSError("conteúdo privado")))
+    dialog.save()
+    assert len(app._types.list_types()) == 1 and not dialog.winfo_exists()
+    assert app.grab_current() is None
+    app.on_manage_types()
+    manager = app._type_dialog
+    assert manager is not None and manager is not dialog
+    app.update()
+    assert len(manager._items) == 1
+    manager.close()
+    # Falhar na leitura depois de criar o Toplevel não deixa uma janela órfã.
+    items = app._types.list_types()
+    monkeypatch.setattr(app._types, "list_types", Mock(side_effect=[items, OSError("privado")]))
+    before = app.winfo_children()
+    app.on_create_type()
+    assert app.winfo_children() == before
+    assert not timer.is_running and not app._failed
+    assert isinstance(messagebox.showerror, Mock)
+    assert "privado" not in str(messagebox.showerror.call_args_list)
+    app.on_close()
+
+
+def test_native_scaled_layout(
+    native_app: tuple[Application, TimerService, StudyRepository, FakeClock, sqlite3.Connection],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import customtkinter as ctk
+
+    app, _, _, _, _ = native_app
+    app.deiconify()
+    app.geometry("900x600")
+    app.update()
+    try:
+        for scale in (1.0, 1.25, 1.5, 2.0):
+            ctk.set_widget_scaling(scale)
+            ctk.set_window_scaling(scale)
+            app.geometry("900x600")
+            app.update()
+            view = app._timer_view
+            for widget in (view.type_menu, view.name_entry, view.start_button, view.finish_button):
+                assert widget.winfo_rootx() >= app.winfo_rootx()
+                assert (
+                    widget.winfo_rootx() + widget.winfo_width()
+                    <= app.winfo_rootx() + app.winfo_width()
+                ), (
+                    scale,
+                    str(widget),
+                    widget.winfo_rootx(),
+                    widget.winfo_width(),
+                    app.winfo_rootx(),
+                    app.winfo_width(),
+                    app.geometry(),
+                )
+            assert view.finish_button.winfo_rooty() + view.finish_button.winfo_height() <= (
+                app.winfo_rooty() + app.winfo_height()
+            )
+    finally:
+        ctk.set_widget_scaling(1.0)
+        ctk.set_window_scaling(1.0)
+        app.on_close()
+
+
+def test_native_reopened_types(
+    native_app: tuple[Application, TimerService, StudyRepository, FakeClock, sqlite3.Connection],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import customtkinter as ctk
+
+    app, timer, _, _, _ = native_app
+    item = app._types.list_types()[0]
+    assert item.name == "Objetos"
+    assert app._timer_view.get_type_id() == item.id
+    assert app._timer_view.get_name() == "Retomar depois"
+    assert not timer.is_running
+    assert app._timer_view.type_menu.cget("state") == "disabled"
+    assert ctk.get_appearance_mode().lower() == app._preferences.get_appearance_mode().value
+    app.on_close()
+
+
 if __name__ == "__main__":
     scenarios = {
         "cycle": test_native_full_cycle_and_minimum_window,
         "recovery": test_native_failed_commit_close_retry_and_recovery,
         "offline_backup": test_native_ui_without_socket_access_and_backup_restore,
         "history_1000": test_native_history_thousand_sessions,
+        "types_themes": test_native_types_and_themes,
+        "reopened_types": test_native_reopened_types,
+        "dialog_errors": test_native_dialog_failures,
+        "scaling": test_native_scaled_layout,
     }
     with pytest.MonkeyPatch.context() as patch:
-        with native_app(Path(sys.argv[2]), patch) as state:
+        mode = AppearanceMode(sys.argv[3]) if len(sys.argv) > 3 else AppearanceMode.DARK
+        with native_app(Path(sys.argv[2]), patch, mode) as state:
             scenarios[sys.argv[1]](state, Path(sys.argv[2]), patch)

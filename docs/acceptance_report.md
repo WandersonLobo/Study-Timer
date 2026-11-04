@@ -135,3 +135,25 @@ esquema v1. Não houve novo build neste bloco; aqueles aceites não certificam
 um pacote contendo v2. Não foram realizados novos testes de energia física ou
 Windows limpo. Os controles de tipos, temas e novos gráficos continuam para
 os blocos seguintes, que aguardam o commit do usuário.
+
+## Bloco 2 — Cronômetro classificado e Claro/Escuro
+
+Em 04/11/2026, os controles de tipos, gerenciamento e preferência de aparência
+foram integrados às duas telas existentes, preservando o esquema v2 e a lógica
+temporal. O Histórico continua com o calendário e as consultas anteriores;
+os gráficos por período não fazem parte deste incremento.
+
+Pip check, Ruff, formatação e mypy passaram. A suíte com opt-in nativo aprovou
+309 testes e pulou somente o smoke sem novo build. Inclui 14 casos Tk reais
+nos dois modos, cadastro, recuperação, reabertura, falhas de gravação/leitura,
+operação por teclado, navegação e layout com escalas simuladas de 100% a 200%.
+As capturas sintéticas do Cronômetro, Histórico e gerenciamento foram conferidas
+localmente em Claro/Escuro e nos tamanhos padrão/mínimo. Contraste de links e
+estados desabilitados foi ajustado após essa inspeção. Os dados pessoais não
+foram utilizados.
+
+Os testes simulam tempo e escala de widgets; não certificam hibernação física,
+mudança real de DPI entre monitores ou um pacote novo. Os avisos de fallback
+de fonte observados e os comandos estão em [testes](testing.md). O executável
+e hash da entrega original permanecem anteriores a este bloco. Ícone,
+dependências, build e CI não foram alterados; os blocos 3 e 4 aguardam commit.

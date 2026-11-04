@@ -39,9 +39,10 @@ O aceite local usa Tk real; os limites estão registrados em acceptance_report.m
 
 O bloco 1 do plano de tipos/Histórico/temas implementa somente a base de dados
 e os serviços: esquema v2, migração v1 → v2, catálogo de tipos e preferência de
-aparência. `Session.study_type_id` é opcional, com padrão None. A UI atual
-continua iniciando sessões sem tipo; os novos serviços ainda não são injetados
-na janela. Os blocos de interface, gráficos e CI aguardam o commit desta etapa.
+aparência. `Session.study_type_id` é opcional, com padrão None. O bloco 2 injeta
+os serviços de tipos/preferências na janela, expõe o catálogo no Cronômetro e
+aplica Claro/Escuro com preferência salva. Histórico por período e ampliação da
+CI continuam reservados aos blocos 3 e 4, aguardando o commit desta etapa.
 
 ## Decisões preservadas da especificação
 
@@ -424,7 +425,7 @@ com `casefold()`. Nomes têm de 1 a 60 caracteres; Sem tipo é reservado. Acento
 são significativos. A unicidade também abrange arquivados.
 
 `StudyColor` enumera blue, teal, orange, purple, rose, cyan, amber e slate.
-A escolha das cores concretas em Claro/Escuro pertence à UI futura. Não há
+A escolha das cores concretas em Claro/Escuro pertence a `app/ui/theme.py`. Não há
 importação de CustomTkinter nos modelos ou serviços. Exemplos dos mockups não
 são cadastros pré-inseridos no banco.
 
@@ -443,8 +444,48 @@ materializa esse id também nas consultas de relatórios, sem mudar seus totais.
 `app_preferences` tem uma única linha, com id fixo e `appearance_mode` restrito
 a light/dark; o padrão persistido é dark. `AppearanceMode` e `PreferencesService`
 expõem essa preferência sem aplicar aparência ou acessar widgets. A conexão
-permanece encapsulada no repositório. O seletor e a aplicação visual do tema
-ficam para o bloco 2.
+permanece encapsulada no repositório. O bloco 2 liga esse serviço ao seletor e
+aplica a aparência antes da construção dos widgets.
+
+## Cronômetro, tipos e temas — bloco 2
+
+`main.run_application()` compõe `StudyTypeService` e `PreferencesService` usando
+o repositório compartilhado. `Application` recebe os quatro serviços; carrega a
+preferência e chama `theme.apply_appearance()` antes de criar a raiz CTk. O
+singleton do banco mantém o padrão Escuro. Não há detecção automática do tema
+do Windows: a escolha explícita Claro/Escuro é persistida pelo serviço.
+
+`TimerView` mantém um mapa de nomes para ids do catálogo, com Sem tipo associado
+a None. A seleção persistida é sempre por id. Tipos arquivados saem das novas
+seleções, mas podem ser apresentados se já vinculados à sessão recuperada.
+Tipo, descrição e acesso ao cadastro ficam bloqueados em running, paused e
+recovered. Finalização confirmada limpa a descrição; falhas preservam os campos.
+Não se persiste a última seleção: uma abertura sem pendência começa em Sem tipo.
+
+`StudyTypeDialog` é um CTkToplevel transitório, com grab e foco inicial, lista
+rolável de ativos/arquivados e campos de nome/cor. Salvar/arquivar/reativar chamam
+serviços; só o retorno confirmado atualiza o catálogo e a seleção. Cancelar não
+grava. Erros de validação ficam no formulário e erros de gravação não anunciam
+sucesso. Falha ao atualizar a UI depois de um COMMIT informa que o tipo foi
+salvo e fecha o diálogo, permitindo recarregar sem criar um registro duplicado.
+Fechamento libera o grab e cancela a ativação agendada, inclusive ao fechar a janela.
+
+Trocar a aparência atualiza pares de cor nos widgets existentes; não reconstrói
+janela, serviços ou cadeias de after. Preserva sessão, foco, campos e rolagem.
+Falha isolada ao gravar a preferência conserva o tema anterior e não altera
+`TimerService.persistence_failed` ou o estado de falha do cronômetro. Erros da
+sessão continuam usando o congelamento conservador e a tentativa segura atuais.
+
+`theme.py` concentra fundo, superfície, texto, links, borda, seleção, erro e cores
+dos tipos. Seus adaptadores de teclado usam o Canvas dos widgets de CustomTkinter
+5.2.2, isolando essa dependência: Tab/foco, Enter/Espaço para botões e setas para
+seletores. Estados desabilitados não iniciam ações. O corpo do Cronômetro é
+rolável e mantém o mínimo 900×600. O Histórico conserva calendário, paginação e
+contratos de relatório; somente paleta e textos permanentes foram ajustados.
+
+Foram removidas as instruções sobre pausa, fechamento, intensidade e atualização
+ao vivo. Permanecem rótulos dos dados, estados de operação e mensagens reais de
+falha, recuperação e energia. Ícone, esquema v2 e regras temporais não mudaram.
 
 Triggers verificam mudanças de status. A transação do repositório verifica também
 o estado final: running exige um intervalo aberto; paused/finished exigem zero.

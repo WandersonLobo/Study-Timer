@@ -48,6 +48,10 @@ classDiagram
     class Application {
         -_timer: TimerService
         -_reports: ReportService
+        -_types: StudyTypeService
+        -_preferences: PreferencesService
+        -_appearance: AppearanceMode
+        -_type_dialog: StudyTypeDialog | None
         -_power: WindowsPowerMonitor
         -_history_view: HistoryView
         -_calendar_month: CalendarMonth
@@ -63,7 +67,12 @@ classDiagram
         -_tick_job: str | None
         -_heartbeat_job: str | None
         -_recovery_job: str | None
-        +__init__(timer: TimerService, reports: ReportService)
+        +__init__(timer: TimerService, reports: ReportService, types: StudyTypeService, preferences: PreferencesService)
+        +on_create_type() None
+        +on_manage_types() None
+        +on_appearance(label: str) None
+        -_reload_types() None
+        -_type_saved(type_id: int | None) None
         +show_view(name: ViewName) None
         +on_month(delta: int) None
         +on_day(day: date) None
@@ -88,9 +97,28 @@ classDiagram
         +start_button: CTkButton
         +pause_button: CTkButton
         +finish_button: CTkButton
-        +__init__(master: CTkFrame, on_start: Callback, on_pause: Callback, on_finish: Callback)
+        +type_menu: CTkOptionMenu
+        +new_type_button: CTkButton
+        +manage_types_button: CTkButton
+        +__init__(master: CTkFrame, on_start: Callback, on_pause: Callback, on_finish: Callback, on_create_type: Callback, on_manage_types: Callback)
+        +set_types(types: list~StudyType~) None
+        +select_type(type_id: int | None) None
+        +get_type_id() int | None
         +get_name() str
         +render(state: UIState, session: Session | None, elapsed_s: int, failed: bool) None
+    }
+    class CTkToplevel {
+        <<external>>
+    }
+    class StudyTypeDialog {
+        -_service: StudyTypeService
+        -_selected_id: int | None
+        +refresh() None
+        +select_type(type_id: int) None
+        +clear_selection() None
+        +save() None
+        +toggle_archived() None
+        +close() None
     }
     class HistoryView {
         +total_labels: list~CTkLabel~
@@ -254,6 +282,11 @@ classDiagram
     Application "1" *-- "1" HistoryView : tela history
     Application --> TimerService : _timer injetado
     Application --> ReportService : _reports injetado
+    Application --> StudyTypeService : _types injetado
+    Application --> PreferencesService : _preferences injetado
+    Application "1" *-- "0..1" StudyTypeDialog : dialogo temporario
+    CTkToplevel <|-- StudyTypeDialog
+    StudyTypeDialog --> StudyTypeService : catalogo injetado
     Application "1" *-- "1" WindowsPowerMonitor : registra e libera
     TimerService --> StudyRepository : _repository compartilhado
     ReportService --> StudyRepository : _repository compartilhado
@@ -268,8 +301,8 @@ classDiagram
     note for HistoryView "CTkScrollableFrame inclui um container externo. Application usa lift para apresenta-lo acima do Cronometro."
     note for TimerService "Ciclo, heartbeat e recuperacao implementados. Falha SQLite congela, sinaliza e propaga; sucesso exige COMMIT."
     note for StudyRepository "Cada comando de escrita possui BEGIN IMMEDIATE, validacao e COMMIT ou rollback integral."
-    note for StudyTypeService "Catalogo implementado sem widgets; ainda nao injetado na interface."
-    note for PreferencesService "Persiste light/dark; aplicacao visual do tema pertence ao bloco 2."
+    note for StudyTypeService "Catalogo sem widgets, exposto pelo Cronometro e dialogo no bloco 2."
+    note for PreferencesService "Persiste light/dark. Application aplica o modo antes dos widgets e permite trocar em execucao."
     note for ReportService "Agrega segundos entre fronteiras locais historicas. Snapshot substitui checkpoint sem dupla soma."
     note for ClockService "Implementado. Somente tick aceita tempo; pausa preserva o ultimo snapshot e seu motivo."
     note for WindowsPowerMonitor "WM_POWERBROADCAST na thread da janela. Congela via callback; SQL e UI ficam para a fila Tk."
@@ -562,6 +595,8 @@ classDiagram
     MainModule ..> ClockService : injeta fonte real
     MainModule ..> TimerService : injeta e recupera sessao
     MainModule ..> ReportService : injeta repositorio
+    MainModule ..> StudyTypeService : injeta repositorio
+    MainModule ..> PreferencesService : injeta repositorio
     MainModule ..> AlreadyRunningError : trata
     MainModule ..> DatabaseHealthError : trata
     MainModule ..> DatabaseVersionError : trata
@@ -631,7 +666,7 @@ validação e backup são abertas e fechadas nos próprios módulos de infraestr
 | Dados locais | Banco e logs no perfil LOCALAPPDATA, fora do executável. Backups automáticos validados com retenção de cinco, além das cópias anteriores à restauração com retenção própria. |
 | Migração | Esquema v2. Origem v1 protegida por backup validado antes de DDL; migração atômica antes da recuperação da sessão. Não há downgrade automático. |
 | Tipos | Um vínculo opcional por sessão; id preservado em renomeação/recoloração/arquivamento. Arquivar tipo da sessão pendente é recusado. |
-| Preferência | Singleton light/dark, inicialmente dark, gravado via serviço/repositório; ainda sem aplicação visual nesta etapa. |
+| Preferência | Singleton light/dark, inicialmente dark; aplicado antes dos widgets e alterável sem recriar serviços ou limpar falhas da sessão. |
 
 ## Estado de implementação e extensão do projeto
 
@@ -646,8 +681,10 @@ validação e backup são abertas e fechadas nos próprios módulos de infraestr
   detalhes paginados e atualização com snapshot ativo antes do heartbeat.
 - **Bloco 1 implementado:** migração v1 → v2 e restauração compatível, catálogo
   de tipos e preferência de aparência nos serviços, vínculo opcional da sessão.
-  A UI de tipos, os temas e os gráficos por período aguardam os blocos seguintes
-  e o commit do usuário. A CI não foi ampliada nesta etapa.
+- **Bloco 2 implementado:** seleção e gerenciamento de tipos, descrição independente,
+  aparência Claro/Escuro persistida, teclado e remoção das instruções permanentes.
+  Os gráficos por período e a ampliação da CI aguardam os blocos seguintes e o
+  commit do usuário. O esquema e as regras temporais foram preservados.
 - **Aceite local:** inclui cenários de Tk real isolados por processo; ver
   [resultados e limites](acceptance_report.md).
 - **Integração Windows implementada:** WindowsPowerMonitor trata suspensão e
