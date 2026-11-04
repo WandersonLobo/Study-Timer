@@ -14,3 +14,4 @@ class Session:
     created_at: int
     finished_at: int | None
     status: SessionStatus
+    study_type_id: int | None = None

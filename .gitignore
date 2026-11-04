@@ -18,7 +18,7 @@ backups/
 !.env.example
 *.zip
 *.sha256
-
+*plans
 __pycache__/
 *.py[codz]
 *$py.class

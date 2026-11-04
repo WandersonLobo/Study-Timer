@@ -42,7 +42,9 @@ def test_backup_includes_committed_wal_records_and_retains_five(tmp_path: Path) 
     try:
         connection.execute("PRAGMA wal_autocheckpoint = 0")
         connection.execute(
-            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)", (1, "Privado", 1000, 1000, "finished")
+            "INSERT INTO sessions (id, name, created_at, finished_at, status) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (1, "Privado", 1000, 1000, "finished"),
         )
         directory = tmp_path / "backups"
         for _ in range(7):
@@ -76,7 +78,8 @@ def test_restore_validates_version_and_preserves_current_database(tmp_path: Path
     path = tmp_path / "estudos.db"
     connection = initialize_database(path)
     connection.execute(
-        "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)", (1, "Original", 1000, 1000, "finished")
+        "INSERT INTO sessions (id, name, created_at, finished_at, status) VALUES (?, ?, ?, ?, ?)",
+        (1, "Original", 1000, 1000, "finished"),
     )
     backup = create_backup(connection, tmp_path / "backups")
     for _ in range(4):

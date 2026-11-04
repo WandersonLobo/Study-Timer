@@ -1,6 +1,7 @@
 # Segurança e privacidade
 
 Revisão inicial em 29/10/2026; persistência e recuperação atualizadas em 30/10/2026.
+Migração de esquema e serviços do bloco 1 atualizados em 03/11/2026.
 O app continua local, sem login, sincronização ou exportação CSV. O cronômetro e
 o tratamento de falhas funcionam pelos serviços e pela tela Cronômetro.
 Erros em callbacks usam mensagens estáticas e logs sem detalhes privados.
@@ -26,14 +27,31 @@ não exibe diálogos e não deixa exceções atravessarem a fronteira nativa.
 - A abertura de um banco existente cria um backup validado pela API SQLite,
   mantendo as cinco cópias mais recentes na pasta privada `backups/`.
   Falha ao validar ou criar o backup impede a abertura normal.
+- O esquema atual é v2. A versão v1 é aceita somente pelos caminhos explícitos
+  de preparação/migração e restauração; a validação normal exige a versão atual.
+  A migração cria backup v1 validado em `backups/before-migration/` antes do DDL,
+  com retenção própria de cinco. DDL, validação e mudança de versão usam uma
+  transação com rollback. Nenhuma sessão ou intervalo é recriado.
 - A restauração disponível em `restore_backup()` valida a origem, obtém o lock
   exclusivo e preserva um backup do destino antes de restaurar pela API SQLite.
   Essas cópias ficam em `backups/before-restore/`, com retenção própria de cinco,
-  para não excluir o arquivo escolhido durante a restauração.
+  para não interferir nas demais rotações. Se a origem escolhida estiver nessa
+  própria pasta, ela ocupa um lugar protegido na retenção: a nova cópia do
+  destino não pode apagá-la ao remover backups antigos.
   Ainda não existe botão de backup/restauração na UI.
+- Para restaurar uma origem v1, a preparação migra e valida uma cópia temporária
+  SQLite antes de alterar o destino. O backup de origem permanece intacto.
+  Uma falha nessa preparação conserva o destino; um destino corrompido continua
+  recusado. Não existe downgrade automático nem substituição destrutiva para
+  acomodar versões desconhecidas. Executáveis v1 não abrem o banco já migrado.
 - O nome é limpo de caracteres de controle e espaços nas pontas; vazio vira
   “Estudo livre”. O limite permanece **120 caracteres**, como definido no PDF.
   SQL recebe entradas por parâmetros; teste estático rejeita SQL dinâmico no app.
+- Os nomes dos tipos também são dados privados e não entram nos logs. São
+  normalizados com NFKC, remoção de controles, compactação de espaços e chave
+  `casefold()`, com limite de 60 caracteres. Chaves de cor e aparência pertencem
+  a enumerações restritas. Tipos e preferência são gravados com parâmetros e
+  transações, preservando as mesmas fronteiras entre serviços, banco e UI.
 - Falhas de inicialização mostram texto estático sem caminhos ou tracebacks.
   Logs usam códigos e tipos de exceção, sem interpolar nome ou conteúdo de sessão.
   A rotação permanece em 1 MiB com três arquivos anteriores.

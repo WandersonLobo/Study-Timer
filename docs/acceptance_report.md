@@ -115,3 +115,23 @@ Remove-Item Env:STUDYTIMER_NATIVE_UI
 Na validação final, o script oficial executou as ferramentas de qualidade e
 `pytest -m 'not build'` no ambiente novo, seguido de `pytest -m build` após gerar
 o onedir. O opt-in nativo estava habilitado também nessa execução do build.
+
+## Bloco 1 — validação posterior do esquema v2 e serviços
+
+Em 04/11/2026, o código-fonte do bloco 1 foi validado em Python 3.12.10 x64 no
+Windows, usando apenas bancos temporários e relógios simulados. A migração
+preserva os registros anteriores e tem testes de rollback de DDL/COMMIT e
+encerramento abrupto antes da confirmação. A restauração de backups v1/v2 e a
+proteção da origem durante a retenção também foram verificadas.
+
+Pip check, Ruff, formatação e mypy passaram. A suíte completa aprovou 286 testes,
+com cinco pulados: quatro cenários Tk opt-in e um smoke sem pacote gerado.
+Executados separadamente com opt-in ativo, os quatro cenários Tk passaram,
+confirmando o ciclo e a compatibilidade da interface atual com o esquema v2.
+Comandos e cobertura estão em [testes](testing.md#bloco-1--tipos-preferências-e-migração-v1-para-v2).
+
+O executável e o SHA-256 registrados anteriormente pertencem à entrega com
+esquema v1. Não houve novo build neste bloco; aqueles aceites não certificam
+um pacote contendo v2. Não foram realizados novos testes de energia física ou
+Windows limpo. Os controles de tipos, temas e novos gráficos continuam para
+os blocos seguintes, que aguardam o commit do usuário.

@@ -133,7 +133,8 @@ def test_details_paginate_large_days_without_rebuilding_calendar(
     start = stamp(2024, 5, 10, 12)
     with repository.transaction() as database:
         database.executemany(
-            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO sessions (id, name, created_at, finished_at, status) "
+            "VALUES (?, ?, ?, ?, ?)",
             [(i, "Sessão de teste", start, start + 35, "finished") for i in range(1, 121)],
         )
         database.executemany(

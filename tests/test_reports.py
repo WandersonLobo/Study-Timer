@@ -217,7 +217,8 @@ def test_thousand_sessions_report_within_two_seconds(
     start = stamp(2024, 5, 10)
     with repository.transaction() as database:
         database.executemany(
-            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO sessions (id, name, created_at, finished_at, status) "
+            "VALUES (?, ?, ?, ?, ?)",
             [(i, "Teste de desempenho", start, start + 35, "finished") for i in range(1, 1001)],
         )
         database.executemany(

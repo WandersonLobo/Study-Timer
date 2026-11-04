@@ -126,7 +126,7 @@ classDiagram
         +persistence_failed: bool
         +is_running: bool
         +__init__(repository: StudyRepository, clock: ClockService)
-        +start_session(name: str) Session
+        +start_session(name: str, study_type_id: int | None) Session
         +pause_session(reason: PauseReason) Session
         +resume_session() Session
         +finish_session() Session
@@ -143,6 +143,21 @@ classDiagram
         -_require_stopped_clock() None
         -_freeze_interval(session_id: int, reason: PauseReason) ClockSnapshot
         -_require_snapshot(session_id: int) ClockSnapshot
+    }
+    class StudyTypeService {
+        -_repository: StudyRepository
+        +__init__(repository: StudyRepository)
+        +list_types(include_archived: bool) list~StudyType~
+        +create_type(name: str, color_key: StudyColor) StudyType
+        +update_type(type_id: int, name: str, color_key: StudyColor) StudyType
+        +archive_type(type_id: int) StudyType
+        +restore_type(type_id: int) StudyType
+    }
+    class PreferencesService {
+        -_repository: StudyRepository
+        +__init__(repository: StudyRepository)
+        +get_appearance_mode() AppearanceMode
+        +set_appearance_mode(mode: AppearanceMode) None
     }
     class ReportService {
         -_repository: StudyRepository
@@ -190,7 +205,7 @@ classDiagram
         +get_session(session_id: int) Session | None
         +get_open_interval(session_id: int) StudyInterval | None
         +get_session_intervals(session_id: int) list~StudyInterval~
-        +start_session(name: str, started_at: int) SessionIntervalPair
+        +start_session(name: str, started_at: int, study_type_id: int | None) SessionIntervalPair
         +resume_session(session_id: int, started_at: int) SessionIntervalPair
         +pause_session(session_id: int, snapshot: ClockSnapshot) Session
         +finish_session(session_id: int, snapshot: ClockSnapshot | None) Session
@@ -198,6 +213,13 @@ classDiagram
         +recover_pending() Session | None
         +get_report_intervals(start: int, end: int, active_interval_id: int | None) SessionIntervals
         +get_zero_duration_sessions(start: int, end: int) list~Session~
+        +get_study_type(type_id: int) StudyType | None
+        +list_study_types(include_archived: bool) list~StudyType~
+        +create_study_type(name: str, color_key: StudyColor) StudyType
+        +update_study_type(type_id: int, name: str, color_key: StudyColor) StudyType
+        +set_study_type_archived(type_id: int, archived: bool) StudyType
+        +get_appearance_mode() AppearanceMode
+        +set_appearance_mode(mode: AppearanceMode) None
         -_open_interval(session_id: int, started_at: int) StudyInterval
         -_close_interval(session_id: int, snapshot: ClockSnapshot) None
         -_validate_snapshot(session_id: int, snapshot: ClockSnapshot) StudyInterval
@@ -235,6 +257,8 @@ classDiagram
     Application "1" *-- "1" WindowsPowerMonitor : registra e libera
     TimerService --> StudyRepository : _repository compartilhado
     ReportService --> StudyRepository : _repository compartilhado
+    StudyTypeService --> StudyRepository : _repository
+    PreferencesService --> StudyRepository : _repository
     TimerService --> ClockService : _clock
     ClockService --> ClockSource : _source
     ClockSource <|.. SystemClock : satisfaz estruturalmente
@@ -244,6 +268,8 @@ classDiagram
     note for HistoryView "CTkScrollableFrame inclui um container externo. Application usa lift para apresenta-lo acima do Cronometro."
     note for TimerService "Ciclo, heartbeat e recuperacao implementados. Falha SQLite congela, sinaliza e propaga; sucesso exige COMMIT."
     note for StudyRepository "Cada comando de escrita possui BEGIN IMMEDIATE, validacao e COMMIT ou rollback integral."
+    note for StudyTypeService "Catalogo implementado sem widgets; ainda nao injetado na interface."
+    note for PreferencesService "Persiste light/dark; aplicacao visual do tema pertence ao bloco 2."
     note for ReportService "Agrega segundos entre fronteiras locais historicas. Snapshot substitui checkpoint sem dupla soma."
     note for ClockService "Implementado. Somente tick aceita tempo; pausa preserva o ultimo snapshot e seu motivo."
     note for WindowsPowerMonitor "WM_POWERBROADCAST na thread da janela. Congela via callback; SQL e UI ficam para a fila Tk."
@@ -292,6 +318,12 @@ gravada no intervalo. O nome é normalizado antes de amostrar o relógio e tamb�
 na fronteira de escrita do repositório. `finish_session()` do repositório aceita
 `snapshot=None` como padrão, permitido somente quando a sessão está paused.
 Os dois conversores de linhas do repositório são métodos estáticos internos.
+
+No bloco 1, `start_session()` no serviço e no repositório recebe
+`study_type_id=None` como padrão. `list_types()`/`list_study_types()` têm
+`include_archived=False` como argumento somente nomeado. O novo catálogo e a
+preferência ainda não são compostos/injetados em `Application`; os serviços
+estão disponíveis para a integração posterior, sem alterar widgets nesta etapa.
 
 `persistence_failed` é uma propriedade somente de leitura. Uma falha SQLite em
 um comando congela o relógio, preserva o primeiro motivo da pausa e sinaliza a
@@ -343,6 +375,30 @@ classDiagram
         +created_at: int
         +finished_at: int | None
         +status: SessionStatus
+        +study_type_id: int | None
+    }
+    class StudyType {
+        <<dataclass>>
+        +id: int
+        +name: str
+        +color_key: StudyColor
+        +is_archived: bool
+    }
+    class StudyColor {
+        <<enumeration>>
+        BLUE = blue
+        TEAL = teal
+        ORANGE = orange
+        PURPLE = purple
+        ROSE = rose
+        CYAN = cyan
+        AMBER = amber
+        SLATE = slate
+    }
+    class AppearanceMode {
+        <<enumeration>>
+        LIGHT = light
+        DARK = dark
     }
     class StudyInterval {
         <<dataclass>>
@@ -400,7 +456,9 @@ classDiagram
     }
 
     Session "1" --> "0..*" StudyInterval : FK session_id
+    Session "0..*" --> "0..1" StudyType : FK study_type_id
     Session --> SessionStatus : status
+    StudyType --> StudyColor : color_key
     ClockSnapshot ..> StudyInterval : identifica por interval_id
     SessionSummary ..> Session : identifica por session_id
 
@@ -417,6 +475,8 @@ classDiagram
     StudyRepository ..> StudyInterval : cria e consulta intervalos
     StudyRepository ..> ClockSnapshot : valida antes de encerrar
     StudyRepository ..> SessionStatus : filtro e conversao
+    StudyRepository ..> StudyType : materializa catalogo
+    StudyRepository ..> AppearanceMode : preferencia persistida
     ClockSource ..> ClockReading : retorno do protocolo
     SystemClock ..> ClockReading : cria amostra
     ClockService ..> ClockReading : captura e valida amostras
@@ -444,6 +504,13 @@ mesma transação. O diagrama não adiciona um atributo `intervals` à dataclass
 `ClockSnapshot`, `ClockReading`, `PeriodTotals` e `SessionSummary` são objetos de
 transferência em memória, não tabelas SQLite. O resumo representa a parcela de
 uma sessão no dia consultado; não contém todos os intervalos dessa sessão.
+
+`StudyType` mapeia `study_types`; `name_key` é detalhe da persistência, não campo
+do modelo público. `Session.study_type_id=None` significa Sem tipo e preserva
+registros anteriores à migração. `is_archived=False` é o padrão do modelo;
+arquivar conserva a identidade e os vínculos históricos. A tabela singleton
+`app_preferences` guarda a enumeração `AppearanceMode` (padrão DARK), sem uma
+classe mutável de configurações nem acesso de widgets à conexão.
 
 Fontes: [models/](../app/models/), com uma classe por arquivo, e
 [schema.sql](../app/database/schema.sql).
@@ -528,11 +595,13 @@ serviço inexistentes.
 
 | Módulo | Operações | Dependências e responsabilidade |
 | --- | --- | --- |
-| [connection.py](../app/database/connection.py) | `initialize_database(database_path: Path) -> sqlite3.Connection` | Usa health e backup; aplica PRAGMAs, cria o esquema inicial e devolve a conexão ao ponto de composição. |
-| [health.py](../app/database/health.py) | `validate_connection(connection) -> None`, `validate_database(database_path) -> None`, `preserve_corrupt_database(database_path) -> None` | Usa SQLite; verifica integridade, FKs e versão; pode lançar `DatabaseHealthError` ou `DatabaseVersionError`. Preserva banco e sidecars sem reparar o original. |
-| [backup.py](../app/database/backup.py) | `create_backup(connection, backup_dir, keep=5) -> Path`, `restore_backup(backup_path, database_path) -> None`, `_restore_validated_backup(backup_path, database_path) -> None` | Usa health e a API de backup da conexão. A restauração obtém `SingleInstance` e preserva uma cópia do destino antes de alterá-lo. |
+| [connection.py](../app/database/connection.py) | `initialize_database(database_path: Path) -> sqlite3.Connection` | Valida a origem, aplica PRAGMAs, cria v2 ou protege/migra v1 antes de devolver a conexão ao ponto de composição. |
+| [health.py](../app/database/health.py) | `validate_integrity(connection) -> None`, `validate_connection(connection, supported_versions=...) -> None`, `validate_database(database_path, supported_versions=...) -> None`, `preserve_corrupt_database(database_path) -> None` | Separa integridade e versão. A política padrão exige v2; caminhos de preparação aceitam explicitamente versões conhecidas. Preserva banco e sidecars sem reparar o original. |
+| [migrations.py](../app/database/migrations.py) | `migrate_database(connection) -> None` | Executa DDL, validação e mudança v1 → v2 na mesma transação. Backup e lock são responsabilidades do chamador. Não reconstrói sessões ou intervalos. |
+| [schema_version.py](../app/database/schema_version.py) | Constantes de versão atual e origens reconhecidas. | Mantém a política de versões única, compartilhada por health, migração, abertura e backups. |
+| [backup.py](../app/database/backup.py) | `create_backup(connection, backup_dir, keep=5, supported_versions=..., preserve_path=None) -> Path`, `restore_backup(backup_path, database_path) -> None` | Usa a API SQLite. Prepara uma cópia migrada/validada da origem antes de restaurar sob `SingleInstance`, protegendo o destino válido. A retenção preserva a origem selecionada mesmo quando ela está na própria pasta de rotação. |
 | [logging_config.py](../app/logging_config.py) | `configure_logging(log_file: Path) -> None`, `prepare_windowed_streams() -> None` | Logs rotativos de 1 MiB com três anteriores; fornece destino nulo para stdout/stderr ausentes em pythonw/EXE. Não grava mensagens brutas das bibliotecas. |
-| [validation.py](../app/validation.py) | `normalize_session_name(name: str) -> str` | Usada por `TimerService.start_session`; remove controles, aplica nome padrão e limite de 120 caracteres. |
+| [validation.py](../app/validation.py) | `normalize_session_name(name: str) -> str`, `normalize_study_type_name(name: str) -> str` | Preserva o contrato de sessão (120 caracteres) e acrescenta normalização de tipo (NFKC, controles, espaços, limite de 60 e nome reservado). |
 | [startup_dialog.py](../app/ui/startup_dialog.py) | `show_startup_message(message: str) -> None` | Usada por `main()`; chama MessageBoxW do Windows para apresentar texto estático sem caminhos privados. |
 | [formatting.py](../app/ui/formatting.py) | `format_minutes(seconds: int) -> str`, `format_clock(seconds: int) -> str` | Formata os segundos já agregados pelo serviço. Usada por HistoryView para cartões/células e detalhes diários. |
 | [history_view.py](../app/ui/history_view.py) | `intensity_color(seconds: int) -> str` | Seleciona faixas fixas de intensidade dos dias do calendário. |
@@ -560,6 +629,9 @@ validação e backup são abertas e fechadas nos próprios módulos de infraestr
 | Relatórios | Somam segundos antes de formatar minutos, usam fronteiras locais históricas e substituem o checkpoint ativo sem dupla soma. Histórico recebe resultados e callbacks; calendário independente dos cartões. |
 | Persistência | WAL, synchronous FULL, FKs e transações explícitas; SQL parametrizado e validação antes do COMMIT. |
 | Dados locais | Banco e logs no perfil LOCALAPPDATA, fora do executável. Backups automáticos validados com retenção de cinco, além das cópias anteriores à restauração com retenção própria. |
+| Migração | Esquema v2. Origem v1 protegida por backup validado antes de DDL; migração atômica antes da recuperação da sessão. Não há downgrade automático. |
+| Tipos | Um vínculo opcional por sessão; id preservado em renomeação/recoloração/arquivamento. Arquivar tipo da sessão pendente é recusado. |
+| Preferência | Singleton light/dark, inicialmente dark, gravado via serviço/repositório; ainda sem aplicação visual nesta etapa. |
 
 ## Estado de implementação e extensão do projeto
 
@@ -572,6 +644,10 @@ validação e backup são abertas e fechadas nos próprios módulos de infraestr
   e erro e fechamento com pausa salva; navegação entre as duas telas.
 - **Histórico implementado:** cartões atuais, calendário e total do mês exibido,
   detalhes paginados e atualização com snapshot ativo antes do heartbeat.
+- **Bloco 1 implementado:** migração v1 → v2 e restauração compatível, catálogo
+  de tipos e preferência de aparência nos serviços, vínculo opcional da sessão.
+  A UI de tipos, os temas e os gráficos por período aguardam os blocos seguintes
+  e o commit do usuário. A CI não foi ampliada nesta etapa.
 - **Aceite local:** inclui cenários de Tk real isolados por processo; ver
   [resultados e limites](acceptance_report.md).
 - **Integração Windows implementada:** WindowsPowerMonitor trata suspensão e

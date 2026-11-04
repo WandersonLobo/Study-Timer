@@ -34,7 +34,7 @@ class TimerService:
         """
         return self._persistence_failed
 
-    def start_session(self, name: str) -> Session:
+    def start_session(self, name: str, study_type_id: int | None = None) -> Session:
         """Cria sessão e primeiro intervalo antes de iniciar o relógio.
 
         Raises:
@@ -47,7 +47,9 @@ class TimerService:
                 raise RuntimeError("Finalize a sessão pendente antes de iniciar outra.")
             self._require_stopped_clock()
             anchor = self._clock.capture_anchor()
-            session, interval = self._repository.start_session(name, int(anchor.wall_time_s))
+            session, interval = self._repository.start_session(
+                name, int(anchor.wall_time_s), study_type_id
+            )
         self._persistence_failed = False
         self._clock.start_interval(interval.id, anchor)
         return session

@@ -284,3 +284,56 @@ rede: ciclo completo, navegação durante contagem, detalhes, troca de mês,
 fechamento e dados preservados na reabertura e substituição da pasta do programa.
 Esse teste não usou o banco pessoal e não alterou configurações de segurança.
 O [roteiro da VM](distribution_acceptance.md) registra o aceite que falta.
+
+## Bloco 1 — tipos, preferências e migração v1 para v2
+
+Validação em 04/11/2026, com Python 3.12.10 x64 no Windows. Este incremento
+implementa somente dados e serviços; não acrescenta os controles de tipos ou
+aparência na interface nem altera a CI.
+
+`test_migrations.py` usa `tests/fixtures/schema_v1.sql`, congelado do esquema
+anterior, e SQLite temporário real. Os 29 cenários verificam preservação de ids,
+nomes, estados e segundos; backup anterior; recuperação posterior à migração;
+equivalência do esquema novo/migrado; rollback de DDL, versão e COMMIT; saída
+abrupta antes do COMMIT; versões desconhecidas; WAL; compatibilidade e retenção
+de backups; restauração v1/v2 para destino novo/v1/v2; falha de preparação;
+destino corrompido e preservação da origem escolhida durante a rotação.
+
+`test_study_types.py` acrescenta 23 cenários de normalização Unicode, unicidade,
+cores, SQL parametrizado, arquivamento, reativação, rollback e vínculo preservado
+ao longo do ciclo, recuperação e consultas. `test_preferences.py` acrescenta
+três cenários de preferência padrão, escolha persistida em reabertura, valores
+inválidos, ausência de registro e falha de COMMIT. As fixtures antigas passaram
+a declarar as colunas de INSERT, preservando os casos de teste anteriores.
+
+Comandos executados na raiz, em PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m ruff format --check .
+.\.venv\Scripts\python.exe -m mypy
+.\.venv\Scripts\python.exe -m pytest --basetemp .pytest_cache/block1-full
+$env:STUDYTIMER_NATIVE_UI = '1'
+.\.venv\Scripts\python.exe -m pytest tests/test_native_ui.py -s --basetemp .pytest_cache/block1-native
+Remove-Item Env:STUDYTIMER_NATIVE_UI
+git diff --check
+```
+
+Resultado: pip check, Ruff, formatação e mypy aprovados. Suíte completa com
+**286 aprovados e cinco pulados**: um smoke por ausência de build e quatro Tk
+por opt-in desativado nessa execução. A execução Tk separada aprovou **os quatro
+cenários**, incluindo ciclo, recuperação, backup/restauração e Histórico com
+1.000 sessões. O tempo medido para a primeira página desse Histórico foi 0,522 s.
+
+A pasta Temp padrão do executor não permitiu criar os diretórios de pytest;
+por isso os comandos especificam `--basetemp` dentro de `.pytest_cache/`.
+A primeira rodada intermediária também identificou oito fixtures ainda usando
+os cinco valores posicionais de sessions, corrigidas antes da validação final.
+Nenhum desses resultados usa o banco pessoal.
+
+Não foi gerado outro executável nem executado o smoke do pacote neste bloco.
+Os quatro cenários Tk comprovam compatibilidade da interface atual com os novos
+serviços/esquema, não os controles planejados dos próximos blocos. Suspensão ou
+hibernação física, novo pacote em Windows limpo e os blocos 2 a 4 permanecem
+fora desta validação.

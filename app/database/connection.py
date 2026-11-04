@@ -10,6 +10,8 @@ from app.database.health import (
     validate_connection,
     validate_database,
 )
+from app.database.migrations import migrate_database
+from app.database.schema_version import SCHEMA_VERSION, SUPPORTED_SCHEMA_VERSIONS
 
 
 def initialize_database(database_path: Path) -> sqlite3.Connection:
@@ -28,7 +30,7 @@ def initialize_database(database_path: Path) -> sqlite3.Connection:
     existing = database_path.exists()
     if existing:
         try:
-            validate_database(database_path)
+            validate_database(database_path, supported_versions=SUPPORTED_SCHEMA_VERSIONS)
         except sqlite3.DatabaseError as error:
             if error.sqlite_errorcode & 0xFF not in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB):
                 raise
@@ -50,6 +52,13 @@ def initialize_database(database_path: Path) -> sqlite3.Connection:
         if not existing:
             schema = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
             connection.executescript(schema)
+        elif connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+            create_backup(
+                connection,
+                database_path.parent / "backups" / "before-migration",
+                supported_versions=SUPPORTED_SCHEMA_VERSIONS,
+            )
+            migrate_database(connection)
         validate_connection(connection)
         if existing:
             create_backup(connection, database_path.parent / "backups")

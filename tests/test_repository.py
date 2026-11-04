@@ -52,7 +52,10 @@ def test_invalid_final_state_rolls_back_whole_transaction(connection: sqlite3.Co
 def test_running_to_paused_requires_closing_interval(connection: sqlite3.Connection) -> None:
     repository = StudyRepository(connection)
     with repository.transaction() as database:
-        database.execute("INSERT INTO sessions VALUES (1, 'Estudo livre', 1000, NULL, 'paused')")
+        database.execute(
+            "INSERT INTO sessions (id, name, created_at, finished_at, status) "
+            "VALUES (1, 'Estudo livre', 1000, NULL, 'paused')"
+        )
         database.execute("INSERT INTO study_intervals VALUES (1, 1, 1000, 1000, NULL)")
         database.execute("UPDATE sessions SET status = 'running' WHERE id = 1")
     with pytest.raises(sqlite3.IntegrityError), repository.transaction() as database:
@@ -69,12 +72,17 @@ def test_running_to_paused_requires_closing_interval(connection: sqlite3.Connect
         "INSERT INTO study_intervals VALUES (1, 999, 1000, 1000, NULL)",
         "INSERT INTO study_intervals VALUES (1, 1, 1000, 999, NULL)",
         "INSERT INTO study_intervals VALUES (1, 1, 1000, 1001, 1000)",
-        "INSERT INTO sessions VALUES (2, ' ', 1000, 1000, 'finished')",
-        "INSERT INTO sessions VALUES (2, 'Inválida', 1000, NULL, 'finished')",
+        "INSERT INTO sessions (id, name, created_at, finished_at, status) "
+        "VALUES (2, ' ', 1000, 1000, 'finished')",
+        "INSERT INTO sessions (id, name, created_at, finished_at, status) "
+        "VALUES (2, 'Inválida', 1000, NULL, 'finished')",
     ],
 )
 def test_invalid_rows_are_rejected(connection: sqlite3.Connection, statement: str) -> None:
-    connection.execute("INSERT INTO sessions VALUES (1, 'Estudo livre', 1000, NULL, 'paused')")
+    connection.execute(
+        "INSERT INTO sessions (id, name, created_at, finished_at, status) "
+        "VALUES (1, 'Estudo livre', 1000, NULL, 'paused')"
+    )
     with pytest.raises(sqlite3.IntegrityError):
         connection.execute(statement)
 

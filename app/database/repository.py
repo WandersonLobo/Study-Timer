@@ -4,8 +4,16 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from app.models import ClockSnapshot, Session, SessionStatus, StudyInterval
-from app.validation import normalize_session_name
+from app.models import (
+    AppearanceMode,
+    ClockSnapshot,
+    Session,
+    SessionStatus,
+    StudyColor,
+    StudyInterval,
+    StudyType,
+)
+from app.validation import normalize_session_name, normalize_study_type_name
 
 
 class StudyRepository:
@@ -54,7 +62,8 @@ class StudyRepository:
     def get_pending_session(self) -> Session | None:
         """Consulta a única sessão pendente sem alterar a recuperação."""
         row = self._connection.execute(
-            "SELECT id, name, created_at, finished_at, status FROM sessions WHERE status IN (?, ?)",
+            "SELECT id, name, created_at, finished_at, status, study_type_id "
+            "FROM sessions WHERE status IN (?, ?)",
             (SessionStatus.RUNNING.value, SessionStatus.PAUSED.value),
         ).fetchone()
         if row is None:
@@ -64,7 +73,8 @@ class StudyRepository:
     def get_session(self, session_id: int) -> Session | None:
         """Consulta uma sessão pelo identificador, inclusive após sua finalização."""
         row = self._connection.execute(
-            "SELECT id, name, created_at, finished_at, status FROM sessions WHERE id = ?",
+            "SELECT id, name, created_at, finished_at, status, study_type_id "
+            "FROM sessions WHERE id = ?",
             (session_id,),
         ).fetchone()
         return None if row is None else self._session_from_row(row)
@@ -87,7 +97,9 @@ class StudyRepository:
         ).fetchall()
         return [self._interval_from_row(row) for row in rows]
 
-    def start_session(self, name: str, started_at: int) -> tuple[Session, StudyInterval]:
+    def start_session(
+        self, name: str, started_at: int, study_type_id: int | None = None
+    ) -> tuple[Session, StudyInterval]:
         """Cria sessão e primeiro intervalo em uma única transação.
 
         Args:
@@ -106,9 +118,14 @@ class StudyRepository:
         with self.transaction() as database:
             if self.get_pending_session() is not None:
                 raise RuntimeError("Já existe uma sessão pendente.")
+            if study_type_id is not None:
+                study_type = self._require_study_type(study_type_id)
+                if study_type.is_archived:
+                    raise ValueError("O tipo de estudo está arquivado.")
             cursor = database.execute(
-                "INSERT INTO sessions (name, created_at, status) VALUES (?, ?, ?)",
-                (name, started_at, SessionStatus.PAUSED.value),
+                "INSERT INTO sessions (name, created_at, status, study_type_id) "
+                "VALUES (?, ?, ?, ?)",
+                (name, started_at, SessionStatus.PAUSED.value, study_type_id),
             )
             session_id = cursor.lastrowid
             assert session_id is not None
@@ -233,6 +250,7 @@ class StudyRepository:
         """
         rows = self._connection.execute(
             "SELECT s.id AS session_id, s.name, s.created_at, s.finished_at, s.status, "
+            "s.study_type_id, "
             "i.id, i.started_at, i.last_seen_at, i.ended_at FROM study_intervals i "
             "JOIN sessions s ON s.id = i.session_id "
             "WHERE (i.started_at < ? AND COALESCE(i.ended_at, i.last_seen_at) > ?) "
@@ -247,6 +265,7 @@ class StudyRepository:
                     row["created_at"],
                     row["finished_at"],
                     SessionStatus(row["status"]),
+                    row["study_type_id"],
                 ),
                 self._interval_from_row(row),
             )
@@ -256,13 +275,111 @@ class StudyRepository:
     def get_zero_duration_sessions(self, start: int, end: int) -> list[Session]:
         """Lista sessões sem segundos persistidos no dia de criação, uma vez só."""
         rows = self._connection.execute(
-            "SELECT id, name, created_at, finished_at, status FROM sessions s "
+            "SELECT id, name, created_at, finished_at, status, study_type_id FROM sessions s "
             "WHERE created_at >= ? AND created_at < ? AND NOT EXISTS "
             "(SELECT 1 FROM study_intervals i WHERE i.session_id = s.id "
             "AND COALESCE(i.ended_at, i.last_seen_at) > i.started_at) ORDER BY id",
             (start, end),
         ).fetchall()
         return [self._session_from_row(row) for row in rows]
+
+    def get_study_type(self, type_id: int) -> StudyType | None:
+        """Consulta um tipo, inclusive arquivado, pelo identificador estável."""
+        row = self._connection.execute(
+            "SELECT id, name, color_key, is_archived FROM study_types WHERE id = ?",
+            (type_id,),
+        ).fetchone()
+        return None if row is None else self._study_type_from_row(row)
+
+    def list_study_types(self, *, include_archived: bool = False) -> list[StudyType]:
+        """Ordena pela chave Unicode sem ocultar arquivados quando solicitados."""
+        rows = self._connection.execute(
+            "SELECT id, name, color_key, is_archived FROM study_types "
+            "WHERE is_archived = 0 OR ? ORDER BY name_key, id",
+            (include_archived,),
+        ).fetchall()
+        return [self._study_type_from_row(row) for row in rows]
+
+    def create_study_type(self, name: str, color_key: StudyColor) -> StudyType:
+        """Cria um tipo com nome único em todo o catálogo, inclusive arquivados."""
+        name = normalize_study_type_name(name)
+        color_key = StudyColor(color_key)
+        with self.transaction() as database:
+            self._require_unique_study_type_name(name)
+            cursor = database.execute(
+                "INSERT INTO study_types (name, name_key, color_key, is_archived) "
+                "VALUES (?, ?, ?, 0)",
+                (name, name.casefold(), color_key.value),
+            )
+            assert cursor.lastrowid is not None
+            study_type = self._require_study_type(cursor.lastrowid)
+        return study_type
+
+    def update_study_type(self, type_id: int, name: str, color_key: StudyColor) -> StudyType:
+        """Altera somente a apresentação, preservando vínculos e durações."""
+        name = normalize_study_type_name(name)
+        color_key = StudyColor(color_key)
+        with self.transaction() as database:
+            self._require_study_type(type_id)
+            self._require_unique_study_type_name(name, type_id)
+            database.execute(
+                "UPDATE study_types SET name = ?, name_key = ?, color_key = ? WHERE id = ?",
+                (name, name.casefold(), color_key.value, type_id),
+            )
+            study_type = self._require_study_type(type_id)
+        return study_type
+
+    def set_study_type_archived(self, type_id: int, archived: bool) -> StudyType:
+        """Oculta/reativa sem apagar; uma pendência impede seu arquivamento."""
+        with self.transaction() as database:
+            self._require_study_type(type_id)
+            pending = self.get_pending_session()
+            if archived and pending is not None and pending.study_type_id == type_id:
+                raise ValueError("O tipo de uma sessão pendente não pode ser arquivado.")
+            database.execute(
+                "UPDATE study_types SET is_archived = ? WHERE id = ?", (archived, type_id)
+            )
+            study_type = self._require_study_type(type_id)
+        return study_type
+
+    def get_appearance_mode(self) -> AppearanceMode:
+        """Obtém o registro único; ausência não é tratada como escolha padrão."""
+        row = self._connection.execute(
+            "SELECT appearance_mode FROM app_preferences WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            raise sqlite3.IntegrityError("Preferência de aparência ausente.")
+        return AppearanceMode(row[0])
+
+    def set_appearance_mode(self, mode: AppearanceMode) -> None:
+        """Confirma uma preferência reconhecida em escrita atômica."""
+        mode = AppearanceMode(mode)
+        with self.transaction() as database:
+            cursor = database.execute(
+                "UPDATE app_preferences SET appearance_mode = ? WHERE id = 1", (mode.value,)
+            )
+            if cursor.rowcount != 1:
+                raise sqlite3.IntegrityError("Preferência de aparência ausente.")
+
+    def _require_study_type(self, type_id: int) -> StudyType:
+        study_type = self.get_study_type(type_id)
+        if study_type is None:
+            raise ValueError("O tipo de estudo não existe.")
+        return study_type
+
+    def _require_unique_study_type_name(self, name: str, type_id: int | None = None) -> None:
+        duplicate = self._connection.execute(
+            "SELECT id FROM study_types WHERE name_key = ? AND (? IS NULL OR id != ?)",
+            (name.casefold(), type_id, type_id),
+        ).fetchone()
+        if duplicate is not None:
+            raise ValueError("Já existe um tipo com esse nome, ativo ou arquivado.")
+
+    @staticmethod
+    def _study_type_from_row(row: sqlite3.Row) -> StudyType:
+        return StudyType(
+            row["id"], row["name"], StudyColor(row["color_key"]), bool(row["is_archived"])
+        )
 
     def _open_interval(self, session_id: int, started_at: int) -> StudyInterval:
         """Insere o intervalo antes de alterar o status, dentro da transação do chamador."""
@@ -316,6 +433,7 @@ class StudyRepository:
             created_at=row["created_at"],
             finished_at=row["finished_at"],
             status=SessionStatus(row["status"]),
+            study_type_id=row["study_type_id"],
         )
 
     @staticmethod

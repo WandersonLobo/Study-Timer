@@ -21,6 +21,15 @@ históricos e somam segundos antes de truncar minutos.
 O aceite local está registrado em [resultados](docs/acceptance_report.md).
 Hibernação física e Windows limpo na VM permanecem pendentes.
 
+**Bloco 1 — dados e serviços:** o esquema v2 acrescenta tipos de estudo e uma
+preferência de aparência, com migração explícita do banco v1. Os serviços permitem
+criar, renomear, recolorir, arquivar e reativar tipos, iniciar uma sessão com tipo
+opcional e persistir Claro/Escuro. Estudos anteriores permanecem sem tipo, com
+seus nomes, estados e segundos preservados. A preferência inicial é Escuro.
+Essas operações ainda não estão expostas na interface; telas, seletor de tema,
+gráficos por tipo e ampliação da CI pertencem aos blocos seguintes, aguardando
+o commit desta etapa. Consulte os contratos em [arquitetura](docs/architecture.md).
+
 ## Estrutura
 
 ```text
@@ -40,6 +49,7 @@ Study-Timer/
 │   ├── validation.py             # Normalização do nome de sessão
 │   ├── models/                   # Um arquivo por dataclass ou enumeração
 │   │   ├── __init__.py           # Exportações públicas dos modelos
+│   │   ├── appearance_mode.py
 │   │   ├── clock_reading.py
 │   │   ├── clock_snapshot.py
 │   │   ├── pause_reason.py
@@ -48,6 +58,8 @@ Study-Timer/
 │   │   ├── session_status.py
 │   │   ├── session_summary.py
 │   │   ├── study_interval.py
+│   │   ├── study_color.py
+│   │   ├── study_type.py
 │   │   └── ui_state.py
 │   ├── ui/
 │   │   ├── timer_view.py
@@ -57,11 +69,15 @@ Study-Timer/
 │   ├── services/
 │   │   ├── clock_service.py       # Fonte de relógio injetável
 │   │   ├── timer_service.py       # Sessões, checkpoints e recuperação
+│   │   ├── study_type_service.py  # Validação e operações de tipos
+│   │   ├── preferences_service.py # Preferência local de aparência, sem widgets
 │   │   └── report_service.py      # Fronteiras locais, DST e snapshots
 │   └── database/
 │       ├── connection.py          # Conexão e PRAGMAs
 │       ├── backup.py              # API SQLite, retenção e restauração validada
 │       ├── health.py              # Integridade, versão e preservação de corrupção
+│       ├── schema_version.py      # Versão atual e versões de origem suportadas
+│       ├── migrations.py          # Migração explícita v1 para v2
 │       ├── repository.py          # Transações e invariantes
 │       └── schema.sql            # Tabelas, checks, índices e trigger
 ├── docs/
@@ -110,6 +126,8 @@ para os contratos, limites desta etapa e próximos passos.
 - Banco: `%LOCALAPPDATA%\StudyTimer\estudos.db`.
 - Log rotativo: `%LOCALAPPDATA%\StudyTimer\logs\studytimer.log`.
 - Backups automáticos: `%LOCALAPPDATA%\StudyTimer\backups\` (últimos cinco).
+- Antes da migração: `backups\before-migration\`, com retenção própria de cinco.
+- Antes da restauração: `backups\before-restore\`, com retenção própria de cinco.
 - Recursos do programa ficam separados dos registros do usuário.
 - O anexo SQL original e os SVGs citados no PDF não foram fornecidos. O esquema
   inicial foi reconstruído do texto; referências aguardadas em `docs/mockups/`.
@@ -161,6 +179,18 @@ dados em LOCALAPPDATA. Backups automáticos usam a API SQLite e são validados.
 A restauração exige aplicativo fechado e valida integridade e versão antes de
 alterar o destino; o ponto de integração é `restore_backup()` na camada de banco.
 Ainda não existe botão de backup/restauração.
+
+Na primeira abertura de um banco v1, a aplicação valida os dados e cria uma cópia
+consistente antes de migrar para v2, sem recriar sessões ou intervalos. Falha no
+backup ou na migração impede a abertura normal. Bancos de versões desconhecidas
+continuam sendo recusados. O backup v1 pode ser restaurado: sua cópia temporária
+é migrada e validada antes de tocar o destino, preservando o arquivo de origem.
+
+Após a migração, executáveis antigos que exigem v1 não abrem o banco v2. Voltar
+a pasta do programa não reverte o banco. Não há downgrade automático; uma
+reversão exige procedimento explícito, aplicativo fechado e backup compatível,
+preservando os dados atuais antes de restaurar. Veja os contratos em
+[arquitetura](docs/architecture.md) e [segurança](docs/security.md).
 
 ## Segurança e privacidade
 

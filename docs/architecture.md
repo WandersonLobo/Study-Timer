@@ -37,6 +37,12 @@ heartbeats, apresenta erros e recuperação e atualiza o calendário com o snaps
 ativo. `recovered` e `idle` são estados visuais, nunca valores persistidos.
 O aceite local usa Tk real; os limites estão registrados em acceptance_report.md.
 
+O bloco 1 do plano de tipos/Histórico/temas implementa somente a base de dados
+e os serviços: esquema v2, migração v1 → v2, catálogo de tipos e preferência de
+aparência. `Session.study_type_id` é opcional, com padrão None. A UI atual
+continua iniciando sessões sem tipo; os novos serviços ainda não são injetados
+na janela. Os blocos de interface, gráficos e CI aguardam o commit desta etapa.
+
 ## Decisões preservadas da especificação
 
 1. Python **3.12.x**, CustomTkinter e `sqlite3` da biblioteca padrão.
@@ -204,7 +210,9 @@ Ticks posteriores ainda em memória são descartados; o período com o programa
 fechado nunca é acrescentado. Se não houve heartbeat, o intervalo recuperado tem
 zero segundos. Falha na recuperação sofre rollback e impede a abertura da janela;
 o tratamento de inicialização mostra uma mensagem estática sem anunciar sucesso.
-O esquema permanece na versão 1, sem migração ou reconstrução de bancos existentes.
+Na entrega original deste incremento, o esquema permaneceu na versão 1. O bloco 1
+do plano posterior introduz a migração explícita para v2, descrita em Banco e
+evolução, sem reconstruir os registros existentes.
 
 ### Falhas e confirmação de gravação
 
@@ -343,7 +351,9 @@ Sem snapshot, o intervalo aberto usa last_seen_at.
 `get_day_sessions()` agrega todos os intervalos da mesma sessão no dia e ordena
 por duração decrescente, nome e ID. Sessões sem segundos aparecem apenas no dia
 de criação; retomadas de zero segundos não criam duplicatas em outros dias.
-O esquema e user_version permanecem inalterados.
+Os relatórios deste incremento não alteraram o esquema. No bloco 1 posterior,
+suas consultas materializam também o vínculo opcional do tipo, sem modificar os
+cálculos, os resumos diários ou a interface do Histórico.
 
 ## Histórico — incremento 7
 
@@ -374,15 +384,67 @@ interrompem a contagem, sem apresentar uma gravação como confirmada.
 
 ## Banco e evolução
 
-O [schema.sql](../app/database/schema.sql) foi reconstruído das seções 11–12 do
-PDF; o anexo SQL original não foi disponibilizado. `user_version=1` identifica
-este esquema inicial, não a versão editorial 1.1 do documento. Bancos de versões
-desconhecidas são rejeitados; migrações futuras precisam ser explícitas.
+O esquema inicial v1 foi reconstruído das seções 11–12 do PDF; o anexo SQL
+original não foi disponibilizado. `user_version` é a versão do banco, independente
+da versão editorial 1.1. O [schema.sql](../app/database/schema.sql) cria diretamente
+v2; [schema_version.py](../app/database/schema_version.py) centraliza a versão
+atual e as origens suportadas. Versões desconhecidas são rejeitadas, sem serem
+tratadas como corrupção ou rebaixadas automaticamente.
 
-A revisão de [segurança](security.md) adicionou lock de instância por perfil,
-verificação de integridade antes de alterações e backup pela API SQLite ao abrir
-um banco existente. Backups são validados e têm retenção de cinco cópias. O banco
-original não é reparado automaticamente em caso de corrupção.
+A abertura valida integridade e versão antes de modificar um banco existente.
+Para v1, cria backup pela API SQLite em `backups/before-migration/`, validado
+como v1, e executa [migrations.py](../app/database/migrations.py) em
+`BEGIN IMMEDIATE`. A migração acrescenta tabelas, FK e índice, valida invariantes
+e confirma `user_version=2` na mesma transação. Uma falha reverte o DDL e os dados.
+Não se usa `executescript()` para contornar essa fronteira transacional.
+Somente depois da migração o bootstrap recupera a sessão pendente e abre a UI.
+
+Preservam-se ids, nomes, timestamps, estados, checkpoints, intervalos, índices e
+trigger. Registros antigos recebem `study_type_id=NULL`, sem inferir assuntos
+pelos nomes. Instalação nova e migração produzem o mesmo esquema lógico.
+
+Backups automáticos, before-migration e before-restore têm retenções independentes
+de cinco cópias. A restauração de backup v1 prepara uma cópia pela API SQLite,
+migra essa cópia e valida v2 antes de alterar o destino. A origem não é migrada.
+Sob o lock exclusivo, o destino válido é preservado antes da restauração pela
+API SQLite. Destino corrompido continua sendo recusado, sem reparo automático.
+Se o backup selecionado estiver na própria pasta before-restore, a rotação
+reserva um lugar para ele entre as cinco cópias; não apaga a origem escolhida.
+
+Depois do COMMIT, voltar ao executável antigo não reverte v2: ele exige v1 e
+recusa a abertura. Não existe downgrade automático; uma reversão requer operação
+explícita com aplicativo fechado e backup compatível, protegendo os dados atuais.
+
+## Tipos de estudo e preferência — bloco 1
+
+`study_types` guarda id, nome, chave de unicidade, chave de cor e arquivamento.
+`StudyType` é imutável e não expõe `name_key`, detalhe de persistência. O serviço
+normaliza nomes com NFKC, remove controles, compacta espaços e deriva a chave
+com `casefold()`. Nomes têm de 1 a 60 caracteres; Sem tipo é reservado. Acentos
+são significativos. A unicidade também abrange arquivados.
+
+`StudyColor` enumera blue, teal, orange, purple, rose, cyan, amber e slate.
+A escolha das cores concretas em Claro/Escuro pertence à UI futura. Não há
+importação de CustomTkinter nos modelos ou serviços. Exemplos dos mockups não
+são cadastros pré-inseridos no banco.
+
+`StudyTypeService` oferece listagem, criação, edição de nome/cor, arquivamento
+e reativação. Não há exclusão física. Renomear ou recolorir preserva id e duração;
+arquivar não remove vínculos históricos. Arquivar o tipo da sessão pendente é
+rejeitado. Escritas passam por `StudyRepository`, com SQL parametrizado,
+validação e retorno somente após COMMIT.
+
+`TimerService.start_session(name, study_type_id=None)` mantém a chamada anterior
+compatível. O repositório verifica existência e atividade do tipo dentro da mesma
+transação de criação da sessão/intervalo. Uma falha não inicia o relógio. Pausa,
+retomada, finalização, checkpoint e recuperação conservam o vínculo. `Session`
+materializa esse id também nas consultas de relatórios, sem mudar seus totais.
+
+`app_preferences` tem uma única linha, com id fixo e `appearance_mode` restrito
+a light/dark; o padrão persistido é dark. `AppearanceMode` e `PreferencesService`
+expõem essa preferência sem aplicar aparência ou acessar widgets. A conexão
+permanece encapsulada no repositório. O seletor e a aplicação visual do tema
+ficam para o bloco 2.
 
 Triggers verificam mudanças de status. A transação do repositório verifica também
 o estado final: running exige um intervalo aberto; paused/finished exigem zero.

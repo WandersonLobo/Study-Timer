@@ -1,6 +1,22 @@
 -- Reconstruído a partir das seções 11–12 do PDF v1.1.
--- O anexo SQL original não foi fornecido. Schema inicial, sem migrações ainda.
+-- Esquema atual v2. Bancos v1 são atualizados por migrations.py, sem recriação.
 BEGIN IMMEDIATE;
+
+CREATE TABLE IF NOT EXISTS study_types (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 60),
+    name_key TEXT NOT NULL UNIQUE CHECK (length(name_key) > 0 AND name_key != 'sem tipo'),
+    color_key TEXT NOT NULL CHECK (
+        color_key IN ('blue', 'teal', 'orange', 'purple', 'rose', 'cyan', 'amber', 'slate')
+    ),
+    is_archived INTEGER NOT NULL DEFAULT 0 CHECK (is_archived IN (0, 1))
+);
+
+CREATE TABLE IF NOT EXISTS app_preferences (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    appearance_mode TEXT NOT NULL CHECK (appearance_mode IN ('light', 'dark'))
+);
+INSERT INTO app_preferences (id, appearance_mode) VALUES (1, 'dark');
 
 CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY,
@@ -8,6 +24,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at INTEGER NOT NULL,
     finished_at INTEGER,
     status TEXT NOT NULL CHECK (status IN ('running', 'paused', 'finished')),
+    study_type_id INTEGER REFERENCES study_types(id),
     CHECK (finished_at IS NULL OR finished_at >= created_at),
     CHECK (
         (status = 'finished' AND finished_at IS NOT NULL)
@@ -33,6 +50,7 @@ CREATE INDEX IF NOT EXISTS ix_intervals_session_started
     ON study_intervals(session_id, started_at);
 CREATE INDEX IF NOT EXISTS ix_intervals_started_at
     ON study_intervals(started_at);
+CREATE INDEX IF NOT EXISTS ix_sessions_study_type ON sessions(study_type_id);
 
 CREATE TRIGGER IF NOT EXISTS validate_session_status_transition
 BEFORE UPDATE OF status ON sessions
@@ -49,5 +67,5 @@ BEGIN
     END;
 END;
 
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 COMMIT;
