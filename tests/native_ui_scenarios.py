@@ -172,7 +172,7 @@ def test_native_full_cycle_and_minimum_window(
     app.show_view("history")
     app.update_idletasks()
     assert_visible(app, app._history_view.period_label)
-    assert app._history_view._session_data[0].duration_s == 2
+    assert app._history_view.report is not None and app._history_view.report.total_s == 0
     canvas = app._history_view.chart.canvas
     assert canvas.winfo_rootx() >= app.winfo_rootx()
     assert canvas.winfo_rootx() + canvas.winfo_width() <= app.winfo_rootx() + app.winfo_width()
@@ -180,10 +180,13 @@ def test_native_full_cycle_and_minimum_window(
     assert app._history_selection.reference == date(2024, 5, 9)
     step(app, source, 1)
     app._history_view.today_button.invoke()
-    assert app._history_view._session_data[0].duration_s == 3
+    assert app._history_view.report.total_s == 0
     app.show_view("timer")
     assert_visible(app, app._timer_view.elapsed_label)
     app._timer_view.pause_button.invoke()
+    app.show_view("history")
+    assert app._history_view._session_data[0].duration_s == 3
+    app.show_view("timer")
     source.advance(3600 * SECOND_NS)
     app._timer_view.start_button.invoke()
     step(app, source, 2)
@@ -603,9 +606,10 @@ def test_native_period_history(
     app.on_start()
     step(app, source, 2)
     app.show_view("history")
-    assert view.report.total_s == 282
+    assert view.report.total_s == 280
     assert timer.is_running
     app.on_pause()
+    assert view.report.total_s == 282
     app.on_close()
 
 

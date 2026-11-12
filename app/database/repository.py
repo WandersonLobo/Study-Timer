@@ -217,7 +217,7 @@ class StudyRepository:
                 (snapshot.valid_until_utc_s, interval.id),
             )
 
-    def recover_pending(self) -> Session | None:
+    def recover_pending(self, checkpoint: ClockSnapshot | None = None) -> Session | None:
         """Recupera running como paused exatamente no checkpoint persistido.
 
         É idempotente: sessões paused e ausência de pendência não mudam. Todo o
@@ -229,9 +229,18 @@ class StudyRepository:
                 interval = self.get_open_interval(session.id)
                 if interval is None:
                     raise sqlite3.IntegrityError("Sessão running sem intervalo aberto.")
+                end = interval.last_seen_at
+                if (
+                    checkpoint is not None
+                    and checkpoint.interval_id == interval.id
+                    and checkpoint.started_at == interval.started_at
+                    and checkpoint.elapsed_s >= 0
+                    and checkpoint.valid_until_utc_s == checkpoint.started_at + checkpoint.elapsed_s
+                ):
+                    end = max(end, checkpoint.valid_until_utc_s)
                 database.execute(
-                    "UPDATE study_intervals SET ended_at = last_seen_at WHERE id = ?",
-                    (interval.id,),
+                    "UPDATE study_intervals SET last_seen_at = ?, ended_at = ? WHERE id = ?",
+                    (end, end, interval.id),
                 )
                 database.execute(
                     "UPDATE sessions SET status = ? WHERE id = ?",

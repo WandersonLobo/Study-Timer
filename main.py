@@ -1,10 +1,12 @@
 """Inicializa os recursos locais e abre a interface do StudyTimer."""
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from app.config import AppPaths
 from app.database.connection import initialize_database
 from app.database.health import DatabaseHealthError, DatabaseVersionError
+from app.database.recovery_point import RecoveryPoint
 from app.database.repository import StudyRepository
 from app.logging_config import configure_logging, prepare_windowed_streams
 from app.services.clock_service import ClockService, SystemClock
@@ -64,14 +66,18 @@ def run_application(paths: AppPaths) -> None:
     try:
         repository = StudyRepository(connection)
         clock = ClockService(SystemClock())
-        timer = TimerService(repository, clock)
-        timer.recover_pending()
-        reports = ReportService(repository)
-        application = Application(
-            timer, reports, StudyTypeService(repository), PreferencesService(repository)
-        )
-        logging.getLogger("studytimer").info("APPLICATION_READY")
-        application.mainloop()
+        with ThreadPoolExecutor(max_workers=1) as worker:
+            recovery = RecoveryPoint(paths.data_dir / "recovery-point.pending", worker)
+            timer = TimerService(repository, clock, recovery.submit)
+            timer.recover_pending(recovery.read())
+            recovery.clear()
+            reports = ReportService(repository)
+            application = Application(
+                timer, reports, StudyTypeService(repository), PreferencesService(repository)
+            )
+            logging.getLogger("studytimer").info("APPLICATION_READY")
+            application.mainloop()
+        recovery.clear()
     finally:
         connection.close()
 

@@ -98,7 +98,11 @@ não exibe diálogos e não deixa exceções atravessarem a fronteira nativa.
 - Falhas de inicialização mostram texto estático sem caminhos ou tracebacks.
   Logs usam códigos e tipos de exceção, sem interpolar nome ou conteúdo de sessão.
   A rotação permanece em 1 MiB com três arquivos anteriores.
-- Heartbeat grava apenas snapshots validados, com rollback em falhas. Erros SQLite
+- O ponto de recuperação local contém o identificador do intervalo, a âncora e a
+  duração validada. O worker sincroniza o temporário antes da substituição. A
+  abertura verifica a correspondência com o intervalo aberto antes de incorporar
+  o ponto. Os arquivos `*.pending` ficam no perfil privado e são excluídos do pacote.
+- Erros SQLite
   congelam a contagem, propagam e mantêm `persistence_failed=True` até um comando
   confirmado; não se anuncia sucesso por apenas conservar dados em memória.
   O log registra `PERSISTENCE_FAILED` e o tipo, sem detalhes privados da exceção.

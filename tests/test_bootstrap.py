@@ -63,8 +63,9 @@ def test_console_startup_preserves_existing_streams() -> None:
     assert sys.stdout is stdout and sys.stderr is stderr
 
 
+@pytest.mark.parametrize("with_recovery_point", [False, True])
 def test_application_composition_recovers_before_creating_the_window(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, with_recovery_point: bool
 ) -> None:
     import main
 
@@ -77,6 +78,9 @@ def test_application_composition_recovers_before_creating_the_window(
         repository.save_checkpoint(session.id, ClockSnapshot(interval.id, 1000, 5, 1005))
     finally:
         database.close()
+    recovery_path = paths.data_dir / "recovery-point.pending"
+    if with_recovery_point:
+        recovery_path.write_text(f"[{interval.id}, 1000, 8, 1008]", encoding="utf-8")
     events: list[str] = []
 
     class StubApplication:
@@ -90,6 +94,7 @@ def test_application_composition_recovers_before_creating_the_window(
             active = timer.get_active_session()
             assert active is not None and active.id == session.id
             assert active.status == SessionStatus.PAUSED
+            assert timer.get_elapsed_seconds() == (8 if with_recovery_point else 5)
             assert not timer.persistence_failed
             events.append("window")
 
@@ -101,3 +106,4 @@ def test_application_composition_recovers_before_creating_the_window(
     monkeypatch.setitem(sys.modules, "app.application", module)
     main.run_application(paths)
     assert events == ["window", "mainloop"]
+    assert not recovery_path.exists()

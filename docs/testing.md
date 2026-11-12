@@ -176,7 +176,7 @@ python -m pytest tests/test_ui_states.py tests/test_timer.py tests/test_recovery
 Cobre ciclo pelos callbacks dos botões, 250 ms/5 s, estado e bloqueio do nome,
 tempo acumulado após retomada, navegação, pausa por lacuna, escolhas do diálogo
 de recuperação, erros privados, falhas de início/retomada/pausa/finalização/
-heartbeat/fechamento, repetição sem tempo extra, falha da fonte e cancelamento dos
+fechamento, repetição sem tempo extra, falha da fonte e cancelamento dos
 callbacks ao fechar. O teste de recuperação usa a mesma composição de serviço
 recuperado que a entrada real.
 
@@ -422,7 +422,7 @@ extremas 1/9998 no Windows. O relatório mensal de 1.000 sessões foi medido em
 0,024 s no teste de referência; as consultas são em lote, sem N+1 por barra.
 
 Os oito testes de `test_history.py` cobrem métricas do período selecionado,
-snapshot antes do heartbeat, pausa, média na virada do dia sem saltar referência,
+ausência de consultas SQLite durante ticks e checkpoint da janela, pausa, média após reabrir o Histórico no dia seguinte sem saltar referência,
 filtros, drill-down/retorno, Hoje, limites, vazio, paginação, reutilização de
 widgets, aparência, leitura do nome atual do filtro e falha de gravação. As
 fixtures de widgets simulam o Canvas; os resultados gráficos são também

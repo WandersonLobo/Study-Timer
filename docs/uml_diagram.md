@@ -773,7 +773,7 @@ validação e backup são abertas e fechadas nos próprios módulos de infraestr
   e erro e fechamento com pausa salva; navegação entre as duas telas.
 - **Histórico implementado:** Dia/Semana/Mês, seleção de data compacta, barras
   empilhadas por tipo, total/média, ranking, filtros e sessões paginadas.
-  Atualização usa o snapshot ativo antes do heartbeat e preserva o período escolhido.
+  A janela atualiza o Histórico com dados confirmados e preserva o período escolhido. A contagem envia um ponto de recuperação local ao worker a cada 5 s.
 - **Bloco 1 implementado:** migração v1 → v2 e restauração compatível, catálogo
   de tipos e preferência de aparência nos serviços, vínculo opcional da sessão.
 - **Bloco 2 implementado:** seleção e gerenciamento de tipos, descrição independente,

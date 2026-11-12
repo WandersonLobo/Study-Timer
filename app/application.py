@@ -260,9 +260,7 @@ class Application(ctk.CTk):
         )
 
     def _refresh_history(self) -> None:
-        report = self._reports.get_period_report(
-            self._history_selection, self._timer.get_snapshot()
-        )
+        report = self._reports.get_period_report(self._history_selection)
         self._history_view.render(
             report,
             self._reports.get_today(),
@@ -283,6 +281,7 @@ class Application(ctk.CTk):
         self._run(
             command,
             validation_message="Verifique a descrição (até 120 caracteres) e o tipo selecionado.",
+            refresh_history=False,
         )
 
     def _reload_types(self) -> None:
@@ -361,15 +360,24 @@ class Application(ctk.CTk):
         """Só apresenta a finalização após o retorno confirmado do serviço."""
         self._run(self._timer.finish_session)
 
-    def _run(self, command: Callable[[], object], *, validation_message: str | None = None) -> None:
+    def _run(
+        self,
+        command: Callable[[], object],
+        *,
+        validation_message: str | None = None,
+        refresh_history: bool = True,
+    ) -> None:
         if self._closed:
             return
         try:
             if self._power.take_pending():
                 command = self._timer.pause_for_power
+                refresh_history = True
             command()
             self._failed = self._timer.persistence_failed
             self._refresh()
+            if refresh_history and self._visible_view == "history" and not self._failed:
+                self._refresh_history()
         except Exception as error:
             self._handle_error(error, validation_message=validation_message)
 
@@ -385,8 +393,6 @@ class Application(ctk.CTk):
             else UIState.PAUSED
         )
         self._render()
-        if self._visible_view == "history" and not self._failed:
-            self._refresh_history()
 
     def _render(self) -> None:
         self._timer_view.render(self._state, self._session, self._elapsed_s, self._failed)
@@ -398,7 +404,17 @@ class Application(ctk.CTk):
         if self._power.pending:
             self._run(self._timer.pause_for_power)
         if self._timer.is_running and not self._failed:
-            self._run(self._timer.tick)
+            try:
+                self._timer.tick()
+                if self._timer.is_running:
+                    elapsed = self._timer.get_elapsed_seconds()
+                    if elapsed != self._elapsed_s:
+                        self._elapsed_s = elapsed
+                        self._timer_view.render_elapsed(elapsed)
+                else:
+                    self._run(lambda: None)
+            except Exception as error:
+                self._handle_error(error)
             if not self._timer.is_running and not self._failed:
                 messagebox.showinfo(
                     "Contagem pausada",
@@ -406,8 +422,6 @@ class Application(ctk.CTk):
                     "A sessão foi pausada no último instante confiável.",
                     parent=self,
                 )
-        elif self._visible_view == "history" and not self._failed:
-            self._run(lambda: None)
         if not self._closed:
             self._tick_job = self.after(TICK_INTERVAL_MS, self._poll)
 
@@ -418,7 +432,7 @@ class Application(ctk.CTk):
         if self._power.pending:
             self._run(self._timer.pause_for_power)
         if self._timer.is_running and not self._failed:
-            self._run(self._timer.heartbeat)
+            self._timer.checkpoint_recovery()
         if not self._closed:
             self._heartbeat_job = self.after(HEARTBEAT_INTERVAL_S * 1000, self._heartbeat)
 

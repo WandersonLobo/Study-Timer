@@ -202,7 +202,7 @@ def test_buttons_drive_full_cycle_and_exclude_pauses(
         app.fire(250)
     app.fire(5000)
     interval = repository.get_open_interval(session.id)
-    assert interval is not None and interval.last_seen_at == session.created_at + 5
+    assert interval is not None and interval.last_seen_at == session.created_at
     assert view.elapsed_label.options["text"] == "00:00:05"
     view.pause_button.options["command"]()
     assert view.start_button.options["text"] == "Retomar"
@@ -237,7 +237,7 @@ def test_close_pauses_and_cancels_callbacks(
     assert completed_seconds(repository, session.id) == 1
 
 
-@pytest.mark.parametrize("operation", ["pause", "finish", "heartbeat", "close"])
+@pytest.mark.parametrize("operation", ["pause", "finish", "close"])
 def test_write_failure_stops_counting_and_can_be_retried(
     setup_ui: tuple[Any, TimerService, StudyRepository, FakeClock, Mock],
     connection: sqlite3.Connection,
@@ -252,7 +252,6 @@ def test_write_failure_stops_counting_and_can_be_retried(
     command = {
         "pause": app.on_pause,
         "finish": app.on_finish,
-        "heartbeat": lambda: app.fire(5000),
         "close": app.on_close,
     }[operation]
     connection.set_authorizer(deny_commit)
@@ -268,10 +267,7 @@ def test_write_failure_stops_counting_and_can_be_retried(
     app.fire(250)
     app.fire(5000)
     assert timer.persistence_failed
-    if operation == "heartbeat":
-        app.on_pause()
-    else:
-        command()
+    command()
     assert not timer.persistence_failed
     assert completed_seconds(repository, session.id) == 1
 

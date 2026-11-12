@@ -10,13 +10,16 @@ com SQLite. Ao abrir, uma sessão interrompida é recuperada como pausada até o
 último checkpoint confirmado, excluindo o tempo com o programa fechado. Falhas
 de persistência interrompem a contagem e são sinalizadas sem confirmar dados.
 A tela Cronômetro permite iniciar, pausar, retomar e finalizar, com atualização
-de 250 ms e heartbeat de 5 s. O nome fica bloqueado até finalizar a sessão.
+de 250 ms e ponto de recuperação local a cada 5 s, gravado em segundo plano.
+O nome fica bloqueado até finalizar a sessão.
 Ao reabrir, um diálogo permite retomar, finalizar ou manter a sessão pausada.
 Fechar a janela salva uma pausa; falhas mantêm a janela aberta para nova tentativa.
 Suspensão/hibernação e retomada do Windows congelam a contagem e mantêm a sessão
 pausada até uma retomada explícita. O detector de lacunas continua complementar.
 O Histórico oferece Dia, Semana e Mês, gráficos empilhados por tipo, totais,
-média diária, ranking e sessões do período, com atualização antes do heartbeat.
+média diária, ranking e sessões do período, com dados confirmados ao pausar,
+finalizar ou recuperar a sessão. Abrir a tela ou mudar a seleção também recarrega
+o relatório.
 Relatórios usam fusos históricos e somam segundos antes de truncar minutos.
 O aceite local está registrado em [resultados](docs/acceptance_report.md).
 Hibernação física e Windows limpo na VM permanecem pendentes.

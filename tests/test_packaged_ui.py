@@ -205,7 +205,7 @@ def _create_and_start(desktop: Desktop, hwnd: int, profile: Path) -> None:
     # O heartbeat fornece uma condição observável; não se pressupõe que um
     # sleep específico corresponda à duração calculada pelo relógio.
     wait_until(
-        lambda: bool(_rows(profile, "SELECT 1 FROM study_intervals WHERE last_seen_at>started_at")),
+        lambda: _database(profile).with_name("recovery-point.pending").is_file(),
         timeout=15,
         message="Não foi observado checkpoint de duração positiva.",
     )

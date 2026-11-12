@@ -2,7 +2,7 @@
 
 import logging
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 from app.database.repository import StudyRepository
@@ -20,10 +20,17 @@ class TimerService:
     trata exceções e só informa sucesso quando a operação retorna após COMMIT.
     """
 
-    def __init__(self, repository: StudyRepository, clock: ClockService) -> None:
+    def __init__(
+        self,
+        repository: StudyRepository,
+        clock: ClockService,
+        save_recovery_point: Callable[[ClockSnapshot], None] | None = None,
+    ) -> None:
         self._repository = repository
         self._clock = clock
+        self._save_recovery_point = save_recovery_point
         self._persistence_failed = False
+        self._closed_elapsed_s = 0
 
     @property
     def persistence_failed(self) -> bool:
@@ -51,6 +58,7 @@ class TimerService:
                 name, int(anchor.wall_time_s), study_type_id
             )
         self._persistence_failed = False
+        self._closed_elapsed_s = 0
         self._clock.start_interval(interval.id, anchor)
         return session
 
@@ -73,9 +81,11 @@ class TimerService:
         with self._persistence_operation():
             session = self._require_active_session(SessionStatus.PAUSED)
             self._require_stopped_clock()
+            closed_elapsed_s = self.get_elapsed_seconds()
             anchor = self._clock.capture_anchor()
             resumed, interval = self._repository.resume_session(session.id, int(anchor.wall_time_s))
         self._persistence_failed = False
+        self._closed_elapsed_s = closed_elapsed_s
         self._clock.start_interval(interval.id, anchor)
         return resumed
 
@@ -99,7 +109,7 @@ class TimerService:
         self._clock.reset()
         return finished
 
-    def recover_pending(self) -> Session | None:
+    def recover_pending(self, checkpoint: ClockSnapshot | None = None) -> Session | None:
         """Recupera ao abrir o processo, sem ler relógios nem retomar a contagem.
 
         Exige relógio sem snapshot para não descartar tempo congelado do processo
@@ -109,7 +119,7 @@ class TimerService:
         if self._clock.get_snapshot() is not None:
             raise RuntimeError("Persista o snapshot atual antes de recuperar uma sessão.")
         with self._persistence_operation():
-            session = self._repository.recover_pending()
+            session = self._repository.recover_pending(checkpoint)
         self._persistence_failed = False
         return session
 
@@ -166,6 +176,9 @@ class TimerService:
 
         A UI apenas formata o total; nunca calcula durações ou soma snapshots.
         """
+        snapshot = self.get_snapshot()
+        if snapshot is not None:
+            return self._closed_elapsed_s + snapshot.elapsed_s
         with self._persistence_operation():
             session = self.get_active_session()
             if session is None:
@@ -184,6 +197,12 @@ class TimerService:
     def get_snapshot(self) -> ClockSnapshot | None:
         """Compartilha só o snapshot ativo; após pausa os relatórios usam o banco."""
         return self._clock.get_snapshot() if self._clock.is_running else None
+
+    def checkpoint_recovery(self) -> None:
+        """Envia o último tick aceito para recuperação, sem transação SQLite."""
+        snapshot = self.get_snapshot()
+        if snapshot is not None and self._save_recovery_point is not None:
+            self._save_recovery_point(snapshot)
 
     @contextmanager
     def _persistence_operation(self) -> Iterator[None]:

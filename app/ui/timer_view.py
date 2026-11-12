@@ -212,7 +212,7 @@ class TimerView(ctk.CTkFrame):
             text_color_disabled=theme.MUTED,
             button_color=theme.DISABLED if pending else theme.PRIMARY,
         )
-        self.elapsed_label.configure(text=format_clock(elapsed_s))
+        self.render_elapsed(elapsed_s)
         labels = {
             UIState.IDLE: "Pronto",
             UIState.RUNNING: "Em andamento",
@@ -223,3 +223,7 @@ class TimerView(ctk.CTkFrame):
             text="Contagem interrompida · operação não confirmada" if failed else labels[state],
             text_color=theme.ERROR if failed else theme.SUCCESS,
         )
+
+    def render_elapsed(self, elapsed_s: int) -> None:
+        """Atualiza somente o visor durante a contagem."""
+        self.elapsed_label.configure(text=format_clock(elapsed_s))

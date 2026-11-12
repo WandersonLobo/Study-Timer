@@ -65,24 +65,31 @@ def test_selected_period_controls_every_metric_and_navigation(
     dialogs.showerror.assert_not_called()
 
 
-def test_live_snapshot_before_heartbeat_and_no_pause_credit(
+def test_ticks_and_recovery_checkpoint_leave_sqlite_and_history_unchanged(
     history_app: tuple[Any, TimerService, StudyRepository, FakeClock, Mock],
+    connection: sqlite3.Connection,
 ) -> None:
     app, timer, repository, source, _ = history_app
     app.on_start()
     session = timer.get_active_session()
     assert session is not None
     app.show_view("history")
-    for _ in range(8):
-        source.advance(250_000_000)
-        app.fire(250)
     view = app._history_view
-    assert view.report.total_s == view._session_data[0].duration_s == 2
+    before = view.report
+    statements: list[str] = []
+    connection.set_trace_callback(statements.append)
+    try:
+        for _ in range(8):
+            source.advance(250_000_000)
+            app.fire(250)
+        app.fire(5000)
+    finally:
+        connection.set_trace_callback(None)
+    assert statements == []
+    assert view.report is before and before.total_s == 0
+    assert app._timer_view.elapsed_label.options["text"] == "00:00:02"
     interval = repository.get_open_interval(session.id)
     assert interval is not None and interval.last_seen_at == interval.started_at
-    rows = tuple(view._session_rows)
-    app.fire(5000)
-    assert view.report.total_s == 2 and tuple(view._session_rows) == rows
     app.on_pause()
     source.advance(100_000_000_000)
     app.fire(250)
@@ -100,6 +107,9 @@ def test_midnight_preserves_reference_and_updates_partial_mean(
     assert app._history_view.report.average_days == 5
     monkeypatch.setattr(app._reports, "get_today", lambda: date(2024, 5, 11))
     app.fire(250)
+    assert app._history_view.report.average_days == 5
+    app.show_view("timer")
+    app.show_view("history")
     assert app._history_view.report.average_days == 6
     assert app._history_selection.reference == date(2024, 5, 10)
     assert app._history_view.report.total_s == 70
@@ -211,5 +221,6 @@ def test_filter_label_in_empty_period_uses_current_type_name(
     app.show_view("history")
     assert app._history_view.filter_label.options["text"] == "POO"
     repository.update_study_type(item.id, "Objetos", StudyColor.PURPLE)
-    app.fire(250)
+    app.show_view("timer")
+    app.show_view("history")
     assert app._history_view.filter_label.options["text"] == "Objetos"

@@ -103,7 +103,8 @@ de propagar a exceção; o log contém somente motivo e tipo da falha.
    gravam sua parte civil inteira e iniciam o relógio somente após COMMIT com a
    **mesma** âncora. Falhas de escrita não iniciam um novo relógio.
 2. **Implementado:** Application usa `after(250)` para chamar `TimerService.tick()`,
-   que delega ao relógio. Um callback independente de 5 s chama heartbeat.
+   que delega ao relógio. Um callback independente de 5 s envia o último ponto
+   aceito ao worker de recuperação, sem acessar o SQLite.
 3. **Implementado:** a pausa USER valida um último tick antes de congelar. Suspensão,
    falha de escrita e encerramento conservador congelam o último tick confiável
    sem ler a fonte. Se o relógio já detectou anomalia, seu motivo inicial é preservado.
@@ -186,7 +187,12 @@ mas o relógio correspondente está congelado, o heartbeat fecha o intervalo no
 snapshot congelado e grava paused atomicamente. Isso cobre pausas detectadas
 pelo relógio e uma nova tentativa após falha de persistência. Não há retomada automática.
 
-Application agenda ticks de aproximadamente 250 ms e heartbeats de 5 s.
+Application agenda ticks de aproximadamente 250 ms e pontos de recuperação de 5 s.
+Ticks aceitos consultam somente o relógio e atualizam o visor quando o segundo muda.
+O arquivo local é substituído atomicamente por um worker. Na abertura, o repositório
+incorpora o ponto apenas ao intervalo que ainda está aberto e fecha o intervalo na
+mesma transação. Se o arquivo estiver ausente, incompleto ou pertencer a outro
+intervalo, usa o checkpoint do SQLite.
 O heartbeat não substitui ticks ausentes nem impõe sozinho
 uma cadência. `last_seen_at` é um checkpoint de duração da aplicação, distinto
 do checkpoint interno do WAL.
@@ -248,7 +254,9 @@ antes de uma tentativa bem-sucedida, prevalece o último checkpoint em disco.
 
 `TimerView` recebe callbacks da `Application`, sem serviços ou SQL. A janela
 coordena comandos, navegação, diálogos e dois callbacks `after`: tick a cada
-250 ms e heartbeat a cada 5 s. Navegar para Histórico conserva os callbacks.
+250 ms e ponto de recuperação local a cada 5 s. Navegar para Histórico conserva os
+callbacks. O relatório é recarregado em ações de navegação e após gravações
+confirmadas, sem usar o snapshot em andamento.
 Não há threads acessando Tk ou a conexão SQLite.
 
 `TimerService.tick()` valida tempo e persiste uma pausa detectada pelo relógio.
@@ -512,9 +520,9 @@ consulta grava ticks, checkpoints ou metadados no banco.
 Os intervalos e seus tipos são obtidos em lote com LEFT JOIN, incluindo os
 registros sem tipo e os cadastros arquivados. Não há uma consulta por barra ou
 linha. A contribuição é recortada pelas fronteiras do período; pausas não são
-intervalos de estudo. O snapshot confiável substitui o checkpoint aberto uma
-única vez, preservando a atualização antes do heartbeat. Snapshots antigos não
-estendem intervalos fechados. Zero segundos só produz detalhe no dia de criação,
+intervalos de estudo. A janela usa o tempo confirmado no banco ao pausar,
+finalizar ou recuperar. Chamadores do serviço que fornecem um snapshot podem
+projetar o tempo do intervalo aberto. Zero segundos só produz detalhe no dia de criação,
 sem acrescentar uma barra ou um tipo com tempo fictício.
 
 `ReportBucket` representa limites UTC e composição por tipo. No Dia, as faixas
